@@ -249,8 +249,6 @@ protected:
             presentInfo.pImageIndices = &m_image_index;
             presentInfo.pResults = &present_res;
 
-            vkWaitForFences(vk_utils::context::get().device(), 1, f, VK_TRUE, UINT64_MAX);
-
             if (vkQueuePresentKHR(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_PRESENT), &presentInfo) != VK_SUCCESS || present_res != VK_SUCCESS) {
                 if (present_res == VK_ERROR_OUT_OF_DATE_KHR) {
                     continue;
