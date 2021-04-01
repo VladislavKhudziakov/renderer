@@ -4,6 +4,3 @@
 [submodule "src/third/shaderc"]
 	path = src/third/shaderc
 	url = https://github.com/google/shaderc
-[submodule "src/third/glm"]
-	path = src/third/glm
-	url = https://github.com/g-truc/glm
