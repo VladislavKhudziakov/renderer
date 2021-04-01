@@ -10,7 +10,7 @@
         LOG_ERROR((exception).message + " occured. code " + std::to_string((exception).code)); \
         assert(false)
 #else
-    #define ASSERT_ERR(error) LOG_ERROR((exception).message + " occured. code " + std::to_string((exception).code))
+    #define ASSERT_ERR(exception) LOG_ERROR((exception).message + " occured. code " + std::to_string((exception).code))
 #endif
 
 #define ASSERT_FATAL(exception)                                                            \

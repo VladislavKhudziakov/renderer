@@ -311,7 +311,11 @@ errors::error vk_utils::context::init_instance(const char* app_name, const vk_ut
     merge_extensions_list(
         instance_extensions_props,
         implicit_required_instance_extensions,
+#ifndef NDEBUG
         std::size(implicit_required_instance_extensions),
+#else
+        0,
+#endif
         instance_extensions_list);
 
     uint32_t i_layers_props_size{0};
@@ -346,7 +350,11 @@ errors::error vk_utils::context::init_instance(const char* app_name, const vk_ut
     merge_layers_list(
         instance_layer_props,
         implicit_required_instance_layers,
+#ifndef NDEBUG
         std::size(implicit_required_instance_layers),
+#else
+        0,
+#endif
         instance_layers_list);
 
     instance_info.ppEnabledLayerNames = instance_layers_list.data();
@@ -368,7 +376,7 @@ errors::error vk_utils::context::init_instance(const char* app_name, const vk_ut
 errors::error vk_utils::context::init_debug_messenger(const vk_utils::context::context_init_info& info)
 {
 #ifdef NDEBUG
-    return 0;
+    return errors::OK;
 #else
     auto messenger_create_info = get_debug_messenger_create_info();
 
@@ -481,7 +489,11 @@ errors::error vk_utils::context::init_device(const context_init_info& context_in
     merge_layers_list(
         device_layers_props,
         implicit_required_device_layers,
+#ifndef NDEBUG
         std::size(implicit_required_device_layers),
+#else
+        0,
+#endif
         device_layers_list);
 
     uint32_t queue_infos_size = 0;
@@ -504,6 +516,11 @@ errors::error vk_utils::context::init_device(const context_init_info& context_in
     if (ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS] == ctx->m_queue_families_indices[QUEUE_TYPE_PRESENT]) {
         queue_infos_size--;
     }
+
+    if (ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS] == ctx->m_queue_families_indices[QUEUE_TYPE_COMPUTE]) {
+        queue_infos_size--;
+    }
+
 
     VkDeviceCreateInfo device_info{};
     device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

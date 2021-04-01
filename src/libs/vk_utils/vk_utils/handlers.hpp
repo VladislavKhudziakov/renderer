@@ -71,6 +71,11 @@ namespace vk_utils
             return m_handle;
         }
 
+        operator const StuctType*() const
+        {
+            return &m_handle;
+        }
+
     private:
         VkDevice m_device{nullptr};
         StuctType m_handle{nullptr};
@@ -285,6 +290,14 @@ namespace vk_utils
         operator const VkCommandBuffer*() const
         {
             return m_handlers.data();
+        }
+
+        VkCommandBuffer operator[](size_t index)
+        {
+            if (index < m_handlers.size()) {
+                return m_handlers[index];
+            }
+            return nullptr;
         }
 
     private:

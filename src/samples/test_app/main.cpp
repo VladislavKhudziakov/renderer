@@ -30,10 +30,20 @@ const char* shaders_paths_glsl[]{
 
 vk_utils::pipeline_layout_handler g_pipeline_layout;
 vk_utils::graphics_pipeline_handler g_pipeline;
-vk_utils::cmd_buffers_handler g_cmd_buffers;
+vk_utils::cmd_buffers_handler g_draw_cmd_buffers;
+vk_utils::cmd_buffers_handler g_data_copy_cmd_buffers;
 vk_utils::cmd_pool_handler g_cmd_pool;
 vk_utils::buffer_handler g_vert_buffer;
+vk_utils::buffer_handler g_vert_staging_buffer;
+
+vk_utils::buffer_handler g_index_buffer;
+vk_utils::buffer_handler g_index_staging_buffer;
+
 vk_utils::device_memory_handler g_vert_data_memory_handler;
+vk_utils::device_memory_handler g_staging_vert_data_memory_handler;
+
+vk_utils::device_memory_handler g_index_data_memory_handler;
+vk_utils::device_memory_handler g_staging_index_data_memory_handler;
 
 vk_utils::shader_module_handler g_shader_modules[std::size(shaders_paths_spv)];
 
@@ -133,31 +143,41 @@ protected:
 
         const auto frames_in_flight = m_swapchain_images.size();
 
-        VkFenceCreateInfo fence_info{};
-        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-
-        VkSemaphoreCreateInfo semaphore_info{};
-        semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        semaphore_info.pNext = nullptr;
-
         std::vector<vk_utils::semaphore_handler> image_acquired_semaphores{frames_in_flight};
         std::vector<vk_utils::semaphore_handler> render_finished_semaphores{frames_in_flight};
         std::vector<vk_utils::fence_handler> render_finished_fences{frames_in_flight};
         std::vector<VkFence> frames_in_flight_fences{m_swapchain_images.size(), nullptr};
 
-        for (auto& s : image_acquired_semaphores) {
-            s.init(vk_utils::context::get().device(), &semaphore_info);
-        }
-        for (auto& s : render_finished_semaphores) {
-            s.init(vk_utils::context::get().device(), &semaphore_info);
-        }
-        for (auto& f : render_finished_fences) {
-            f.init(vk_utils::context::get().device(), &fence_info);
-        }
-
         uint32_t curr_frame{0};
 
+        auto create_sync_objects = [&image_acquired_semaphores, &render_finished_semaphores, &render_finished_fences, &frames_in_flight_fences]() {
+            VkFenceCreateInfo fence_info{};
+            fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            fence_info.pNext = nullptr;
+
+            VkSemaphoreCreateInfo semaphore_info{};
+            semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            semaphore_info.pNext = nullptr;
+
+            for (auto& s : image_acquired_semaphores) {
+                s.init(vk_utils::context::get().device(), &semaphore_info);
+            }
+            for (auto& s : render_finished_semaphores) {
+                s.init(vk_utils::context::get().device(), &semaphore_info);
+            }
+            for (auto& f : render_finished_fences) {
+                f.init(vk_utils::context::get().device(), &fence_info);
+            }
+
+            for (auto& f : frames_in_flight_fences) {
+                f = VK_NULL_HANDLE;
+            }
+        };
+
+        create_sync_objects();
+
         auto recreate_swapchain = [this]() {
+            vkQueueWaitIdle(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS));
             vkDeviceWaitIdle(vk_utils::context::get().device());
 
             create_swapchain();
@@ -169,11 +189,9 @@ protected:
         };
 
         while (!glfwWindowShouldClose(m_window)) {
-            glfwPollEvents();
-
-            if (m_resized) {
-                recreate_swapchain();
-                m_resized = false;
+            if (frames_in_flight_fences[m_image_index] != nullptr) {
+                VkFence f[] = {frames_in_flight_fences[m_image_index]};
+                vkWaitForFences(vk_utils::context::get().device(), 1, f, VK_TRUE, UINT64_MAX);
             }
 
             auto res = vkAcquireNextImageKHR(vk_utils::context::get().device(), m_swapchain, UINT64_MAX, image_acquired_semaphores[curr_frame], nullptr, &m_image_index);
@@ -181,15 +199,13 @@ protected:
                 if (res != VK_SUCCESS) {
                     if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
                         recreate_swapchain();
+                        vkAcquireNextImageKHR(vk_utils::context::get().device(), m_swapchain, UINT64_MAX, image_acquired_semaphores[curr_frame], nullptr, &m_image_index);
+                    } else if (res == VK_ERROR_DEVICE_LOST) {
+                        return ERROR_FATAL(VK_ERROR_DEVICE_LOST, "device lost occured in vkAcquireNextImageKHR");
                     } else {
-                        return ERROR_FATAL(res, "Acquire image failed.");
+                        LOG_ERROR("Acquire image failed.");
                     }
                 }
-            }
-
-            if (frames_in_flight_fences[m_image_index] != nullptr) {
-                VkFence f[] = {frames_in_flight_fences[m_image_index]};
-                vkWaitForFences(vk_utils::context::get().device(), 1, f, VK_TRUE, UINT64_MAX);
             }
 
             frames_in_flight_fences[m_image_index] = render_finished_fences[curr_frame];
@@ -199,30 +215,26 @@ protected:
 
             if (m_upd_callback) {
                 if (auto err_code = m_upd_callback(this, &cmd_buffers, &cmd_buffers_count); err_code != VK_SUCCESS) {
-                    return ERROR(err_code, "update failed");
+                    LOG_ERROR("update failed.");
                 }
             }
 
             VkSubmitInfo submit_info{};
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             submit_info.pNext = nullptr;
-
-            VkSemaphore queue_submit_signal[] = {render_finished_semaphores[curr_frame]};
-            VkSemaphore queue_submit_wait[] = {image_acquired_semaphores[curr_frame]};
             VkPipelineStageFlags wait_stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-            submit_info.pSignalSemaphores = queue_submit_signal;
-            submit_info.signalSemaphoreCount = std::size(queue_submit_signal);
-            submit_info.pWaitSemaphores = queue_submit_wait;
-            submit_info.waitSemaphoreCount = std::size(queue_submit_wait);
+            submit_info.pSignalSemaphores = render_finished_semaphores[curr_frame];
+            submit_info.signalSemaphoreCount = 1;
+            submit_info.pWaitSemaphores = image_acquired_semaphores[curr_frame];
+            submit_info.waitSemaphoreCount = 1;
             submit_info.pWaitDstStageMask = &wait_stages;
             submit_info.pCommandBuffers = cmd_buffers;
             submit_info.commandBufferCount = 1;
 
 
-            VkFence f[] = {render_finished_fences[curr_frame]};
-            if (vkResetFences(vk_utils::context::get().device(), 1, f) != VK_SUCCESS) {
-                return ERROR(-1, "reset fences failed.");
+            if (vkResetFences(vk_utils::context::get().device(), 1, render_finished_fences[curr_frame]) != VK_SUCCESS) {
+                LOG_ERROR("reset fences failed.");
             }
 
             if (cmd_buffers != nullptr && cmd_buffers_count > 0) {
@@ -230,30 +242,40 @@ protected:
                 if (res != VK_SUCCESS) {
                     if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
                         recreate_swapchain();
+                    } else if (res == VK_ERROR_DEVICE_LOST) {
+                        return ERROR_FATAL(VK_ERROR_DEVICE_LOST, "device lost occured in vkQueuePresentKHR");
                     } else {
-                        return ERROR(res, "queue sbmit failed.");
+                        LOG_ERROR("queue sbmit failed.");
                     };
                 }
             }
 
-            VkSemaphore present_wait[] = {render_finished_semaphores[curr_frame]};
             VkResult present_res;
             VkSwapchainKHR swapchain[] = {m_swapchain};
             VkPresentInfoKHR presentInfo{};
             presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
             presentInfo.pNext = nullptr;
-            presentInfo.pWaitSemaphores = present_wait;
-            presentInfo.waitSemaphoreCount = std::size(present_wait);
+            presentInfo.pWaitSemaphores = render_finished_semaphores[curr_frame];
+            presentInfo.waitSemaphoreCount = 1;
             presentInfo.pSwapchains = swapchain;
             presentInfo.swapchainCount = std::size(swapchain);
             presentInfo.pImageIndices = &m_image_index;
             presentInfo.pResults = &present_res;
 
             if (vkQueuePresentKHR(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_PRESENT), &presentInfo) != VK_SUCCESS || present_res != VK_SUCCESS) {
-                if (present_res == VK_ERROR_OUT_OF_DATE_KHR) {
+                if (present_res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
                     continue;
+                } else if (res == VK_ERROR_DEVICE_LOST) {
+                    return ERROR_FATAL(VK_ERROR_DEVICE_LOST, "device lost occured in vkQueuePresentKHR");
                 }
-                return ERROR(present_res, "surface presentation failed.");
+                LOG_ERROR("surface presentation failed.");
+            }
+
+            glfwPollEvents();
+
+            if (m_resized) {
+                recreate_swapchain();
+                m_resized = false;
             }
 
             ++curr_frame;
@@ -339,8 +361,13 @@ private:
             m_swapchain_create_info->imageExtent = get_image_extent();
             m_swapchain_create_info->preTransform =
                 m_surace_capabilities.currentTransform;
-            m_swapchain_create_info->minImageCount =
-                std::clamp(m_surace_capabilities.minImageCount + 1, m_surace_capabilities.minImageCount, m_surace_capabilities.maxImageCount);
+
+            if (m_surace_capabilities.maxImageCount == 0) {
+                m_swapchain_create_info->minImageCount = m_surace_capabilities.minImageCount + 1;
+            } else {
+                m_swapchain_create_info->minImageCount =
+                    std::clamp(m_surace_capabilities.minImageCount + 1, m_surace_capabilities.minImageCount, m_surace_capabilities.maxImageCount);
+            }
 
             return m_swapchain.init(vk_utils::context::get().device(), &*m_swapchain_create_info);
         }
@@ -359,7 +386,9 @@ private:
         std::vector<VkPresentModeKHR> present_modes(surface_present_modes_count);
         vkGetPhysicalDeviceSurfacePresentModesKHR(vk_utils::context::get().gpu(), vk_utils::context::get().surface(), &surface_present_modes_count, present_modes.data());
 
-        m_swapchain_create_info.emplace();
+        if (!m_swapchain_create_info.has_value()) {
+            m_swapchain_create_info.emplace();
+        }
 
         m_swapchain_create_info->sType =
             VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -407,8 +436,12 @@ private:
         select_present_mode();
 
         m_swapchain_create_info->imageExtent = get_image_extent();
-        m_swapchain_create_info->minImageCount =
-            std::clamp(m_surace_capabilities.minImageCount + 1, m_surace_capabilities.minImageCount, m_surace_capabilities.maxImageCount);
+        if (m_surace_capabilities.maxImageCount == 0) {
+            m_swapchain_create_info->minImageCount = m_surace_capabilities.minImageCount + 1;
+        } else {
+            m_swapchain_create_info->minImageCount =
+                std::clamp(m_surace_capabilities.minImageCount + 1, m_surace_capabilities.minImageCount, m_surace_capabilities.maxImageCount);
+        }
 
         m_swapchain_create_info->imageArrayLayers = 1;
         m_swapchain_create_info->imageUsage =
@@ -562,7 +595,6 @@ private:
     }
 
     GLFWwindow* m_window{};
-    //    VkSurfaceKHR vk_utils::context::get().surface(){};
     vk_utils::swapchain_handler m_swapchain{};
 
     vk_utils::pass_handler m_pass;
@@ -693,21 +725,90 @@ int32_t load_shader(const std::string& path, VkDevice device, vk_utils::shader_m
 
 float vert_data[][3]{
     {-0.5, -0.5, 0.0},
-    {1., 0., 0.},
-    {0.0, 0.5, 0.0},
+    {1., 1., 1.},
+    {-0.5, 0.5, 0.0},
     {0., 1., 0.},
-    {0.5, -0.5, 0.0},
+    {0.5, 0.5, 0.0},
     {0., 0., 1.},
+    {0.5, -0.5, 0.0},
+    {1., 0., 1.},
+};
+
+uint16_t indices[] = {
+    0, 1, 2, 0, 2, 3
 };
 
 
-int32_t init_pipeline(const hello_triangle_app* app)
+errors::error create_buffer(
+    vk_utils::buffer_handler& buffer,
+    VkBufferUsageFlags buffer_usage,
+    vk_utils::device_memory_handler& memory,
+    VkMemoryPropertyFlags memory_props,
+    uint32_t size,
+    void* data = nullptr)
+{
+    VkBufferCreateInfo buffer_info{};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.pNext = nullptr;
+
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const uint32_t queue_family_idx = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
+    buffer_info.pQueueFamilyIndices = &queue_family_idx;
+    buffer_info.queueFamilyIndexCount = 1;
+    buffer_info.size = size;
+    buffer_info.usage = buffer_usage;
+
+    if (auto err_code = buffer.init(vk_utils::context::get().device(), &buffer_info); err_code != VK_SUCCESS) {
+        return ERROR(err_code, "cannot init buffer");
+    }
+
+    auto alloc_info = vk_utils::context::get().get_memory_alloc_info(buffer, memory_props);
+
+    VkMemoryAllocateInfo memory_info{};
+    memory_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    memory_info.memoryTypeIndex = alloc_info.memory_type_index;
+    memory_info.allocationSize = alloc_info.allocation_size;
+
+    if (auto err_code = memory.init(vk_utils::context::get().device(), &memory_info); err_code != VK_SUCCESS) {
+        return ERROR(err_code, "cannot innit memory");
+    }
+
+    if (data != nullptr && memory_props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+        void* map_ptr{nullptr};
+        vkMapMemory(vk_utils::context::get().device(), memory, 0, VK_WHOLE_SIZE, 0, &map_ptr);
+        std::memcpy(map_ptr, data, size);
+        if (memory_props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
+            vkUnmapMemory(vk_utils::context::get().device(), memory);
+        } else {
+            VkMappedMemoryRange range{};
+            range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+            range.pNext = nullptr;
+            range.size = VK_WHOLE_SIZE;
+            range.offset = 0;
+            range.memory = memory;
+            vkFlushMappedMemoryRanges(vk_utils::context::get().device(), 1, &range);
+        }
+        vkUnmapMemory(vk_utils::context::get().device(), memory);
+    }
+
+    vkBindBufferMemory(vk_utils::context::get().device(), buffer, memory, 0);
+
+    return errors::OK;
+}
+
+
+int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
 {
     static VkShaderStageFlagBits shader_stages[std::size(shaders_paths_glsl)];
     static VkPipelineShaderStageCreateInfo
         shader_stages_infos[std::size(shaders_paths_glsl)];
 
+
     static bool shaders_loaded = false;
+
+    if (reset) {
+        shaders_loaded = false;
+    }
 
     if (!shaders_loaded) {
         for (int i = 0; i < std::size(shaders_paths_glsl); ++i) {
@@ -731,40 +832,27 @@ int32_t init_pipeline(const hello_triangle_app* app)
 
     static bool vert_buffer_initialized = false;
 
+    if (reset) {
+        vert_buffer_initialized = false;
+    }
+
     if (!vert_buffer_initialized) {
-        VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.pNext = nullptr;
-        buffer_info.size = sizeof(vert_data);
-        buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        if (auto err_code = g_vert_buffer.init(vk_utils::context::get().device(), &buffer_info); err_code != VK_SUCCESS) {
-            return err_code;
-        }
-
-        auto mem_alloc_data = vk_utils::context::get().get_memory_alloc_info(g_vert_buffer, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-        if (mem_alloc_data.memory_type_index < 0) {
-            return  -1;
-        }
-
-        VkMemoryAllocateInfo mem_alloc_info{};
-        mem_alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        mem_alloc_info.pNext = nullptr;
-        mem_alloc_info.memoryTypeIndex = mem_alloc_data.memory_type_index;
-        mem_alloc_info.allocationSize = mem_alloc_data.allocation_size;
-
-        if (g_vert_data_memory_handler.init(vk_utils::context::get().device(), &mem_alloc_info) != VK_SUCCESS) {
+        if (create_buffer(g_vert_buffer, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, g_vert_data_memory_handler, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sizeof(vert_data)) != errors::OK) {
             return -1;
         }
 
-        void* mapped_buffer;
-        vkMapMemory(vk_utils::context::get().device(), g_vert_data_memory_handler, 0, sizeof(vert_data), 0, &mapped_buffer);
-        std::memcpy(mapped_buffer, vert_data, sizeof(vert_data));
-        vkUnmapMemory(vk_utils::context::get().device(), g_vert_data_memory_handler);
+        if (create_buffer(g_vert_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, g_staging_vert_data_memory_handler, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, sizeof(vert_data), vert_data) != errors::OK) {
+            return -1;
+        }
 
-        vkBindBufferMemory(vk_utils::context::get().device(), g_vert_buffer, g_vert_data_memory_handler, 0);
+        if (create_buffer(g_index_buffer, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, g_index_data_memory_handler, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sizeof(indices)) != errors::OK) {
+            return -1;
+        }
+
+        if (create_buffer(g_index_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, g_staging_vert_data_memory_handler, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, sizeof(indices), indices) != errors::OK) {
+            return -1;
+        }
+
 
         vert_buffer_initialized = true;
     }
@@ -839,7 +927,7 @@ int32_t init_pipeline(const hello_triangle_app* app)
     rasterization_info.rasterizerDiscardEnable = VK_FALSE;
 
     rasterization_info.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterization_info.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterization_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization_info.polygonMode = VK_POLYGON_MODE_FILL;
     rasterization_info.lineWidth = 1.0f;
 
@@ -921,12 +1009,15 @@ int32_t init_pipeline(const hello_triangle_app* app)
 
     static bool cmd_pool_created = false;
 
+    if (reset) {
+        cmd_pool_created = false;
+    }
+
     if (!cmd_pool_created) {
         VkCommandPoolCreateInfo cmd_pool_create_info{};
         cmd_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         cmd_pool_create_info.pNext = nullptr;
         cmd_pool_create_info.queueFamilyIndex = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
-
         if (const auto err_code = g_cmd_pool.init(vk_utils::context::get().device(), &cmd_pool_create_info);
             err_code != VK_SUCCESS) {
             return err_code;
@@ -942,12 +1033,40 @@ int32_t init_pipeline(const hello_triangle_app* app)
     cmd_buff_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmd_buff_alloc_info.commandPool = g_cmd_pool;
 
-    if (const auto err_code = g_cmd_buffers.init(vk_utils::context::get().device(), &cmd_buff_alloc_info); err_code != VK_SUCCESS) {
+    if (const auto err_code = g_draw_cmd_buffers.init(vk_utils::context::get().device(), &cmd_buff_alloc_info); err_code != VK_SUCCESS) {
         return -1;
     }
 
-    const VkCommandBuffer* cmd_buffers = g_cmd_buffers;
-    auto buffers_count = g_cmd_buffers.buffers_count();
+    static bool vert_buffer_copied = false;
+
+    if (!vert_buffer_copied) {
+        cmd_buff_alloc_info.commandBufferCount = 1;
+
+        if (const auto err_code = g_data_copy_cmd_buffers.init(vk_utils::context::get().device(), &cmd_buff_alloc_info); err_code != VK_SUCCESS) {
+            return -1;
+        }
+
+        VkCommandBufferBeginInfo data_copy_begin_info{};
+        data_copy_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        data_copy_begin_info.pNext = nullptr;
+        data_copy_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        data_copy_begin_info.pInheritanceInfo = nullptr;
+
+        vkBeginCommandBuffer(g_data_copy_cmd_buffers[0], &data_copy_begin_info);
+        VkBufferCopy copy_info{};
+        copy_info.size = sizeof(vert_data);
+        copy_info.srcOffset = 0;
+        copy_info.dstOffset = 0;
+        vkCmdCopyBuffer(g_data_copy_cmd_buffers[0], g_vert_staging_buffer, g_vert_buffer, 1, &copy_info);
+        copy_info.size = sizeof(indices);
+        vkCmdCopyBuffer(g_data_copy_cmd_buffers[0], g_index_staging_buffer, g_index_buffer, 1, &copy_info);
+
+        vkEndCommandBuffer(g_data_copy_cmd_buffers[0]);
+
+        vert_buffer_copied = true;
+    }
+
+    const VkCommandBuffer* cmd_buffers = g_draw_cmd_buffers;
 
     VkCommandBufferBeginInfo cmd_buf_begin_info{};
     cmd_buf_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -982,7 +1101,8 @@ int32_t init_pipeline(const hello_triangle_app* app)
         VkBuffer v_buffer[] = {g_vert_buffer};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(cmd_buffers[i], 0, 1, v_buffer, offsets);
-        vkCmdDraw(cmd_buffers[i], 3, 1, 0, 0);
+        vkCmdBindIndexBuffer(cmd_buffers[i], g_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdDrawIndexed(cmd_buffers[i], std::size(indices), 1, 0, 0, 0);
         vkCmdEndRenderPass(cmd_buffers[i]);
         res = vkEndCommandBuffer(cmd_buffers[i]);
 
@@ -1003,14 +1123,25 @@ int main(int argn, const char** argv)
     });
 
     app.set_on_update_callback([](const hello_triangle_app* app, const VkCommandBuffer** cmd_bufs, uint32_t* bufs_count) {
-        const VkCommandBuffer* handlers = g_cmd_buffers;
-        *cmd_bufs = &handlers[app->get_current_swapchain_img_index()];
-        *bufs_count = 1;
+        static bool is_first = true;
+        if (is_first) {
+            static VkCommandBuffer handlers[] = {
+                g_data_copy_cmd_buffers[0], g_draw_cmd_buffers[app->get_current_swapchain_img_index()]
+            };
+            *cmd_bufs = handlers;
+            *bufs_count = std::size(handlers);
+            is_first = false;
+        } else {
+            const VkCommandBuffer* handlers = g_draw_cmd_buffers;
+            *cmd_bufs = &handlers[app->get_current_swapchain_img_index()];
+            *bufs_count = 1;
+        }
+
         return 0;
     });
 
     app.set_on_resize_callback([](const hello_triangle_app* app) {
-        g_cmd_buffers.destroy();
+        g_draw_cmd_buffers.destroy();
         g_pipeline_layout.destroy();
         g_pipeline.destroy();
 
@@ -1018,7 +1149,7 @@ int main(int argn, const char** argv)
     });
 
     app.set_on_destroy_callback([](const hello_triangle_app* app) {
-        g_cmd_buffers.destroy();
+        g_draw_cmd_buffers.destroy();
         g_cmd_pool.destroy();
         g_pipeline_layout.destroy();
         g_pipeline.destroy();
