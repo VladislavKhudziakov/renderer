@@ -4,3 +4,9 @@
 [submodule "src/third/shaderc"]
 	path = src/third/shaderc
 	url = https://github.com/google/shaderc
+[submodule "src/third/glm/glm"]
+	path = src/third/glm/glm
+	url = https://github.com/g-truc/glm
+[submodule "src/third/VulkanMemoryAllocator/VulkanMemoryAllocator"]
+	path = src/third/VulkanMemoryAllocator/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator

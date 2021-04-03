@@ -1,9 +1,9 @@
 #pragma once
 
+#include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
+
 #include <utility>
 #include <vector>
-#include <vulkan/vulkan.h>
-
 
 namespace vk_utils
 {
@@ -63,6 +63,7 @@ namespace vk_utils
             if (m_device != nullptr && m_handle != nullptr) {
                 destroy_func(m_device, m_handle, nullptr);
                 m_handle = nullptr;
+                m_device = nullptr;
             }
         }
 
@@ -364,6 +365,131 @@ namespace vk_utils
         VkPipeline m_handler;
     };
 
+
+    class vma_allocator_handler
+    {
+    public:
+        vma_allocator_handler() = default;
+        ~vma_allocator_handler()
+        {
+            destroy();
+        }
+
+        vma_allocator_handler(const vma_allocator_handler&) = delete;
+        vma_allocator_handler& operator=(const vma_allocator_handler&) = delete;
+        vma_allocator_handler(vma_allocator_handler&& src) noexcept
+        {
+            *this = std::move(src);
+        }
+
+        vma_allocator_handler& operator=(vma_allocator_handler&& src) noexcept
+        {
+            if (this == &src) {
+                return *this;
+            }
+            std::swap(m_handle, src.m_handle);
+            return *this;
+        }
+
+
+        VkResult init(VmaAllocatorCreateInfo* info)
+        {
+            return vmaCreateAllocator(info, &m_handle);
+        }
+
+        void destroy()
+        {
+            if (m_handle != nullptr) {
+                vmaDestroyAllocator(m_handle);
+                m_handle = nullptr;
+            }
+        }
+
+        operator VmaAllocator() const
+        {
+            return m_handle;
+        }
+
+    private:
+        VmaAllocator m_handle{nullptr};
+    };
+
+
+    class vma_buffer_handler
+    {
+    public:
+        vma_buffer_handler() = default;
+        ~vma_buffer_handler()
+        {
+            destroy();
+        }
+        vma_buffer_handler(const vma_buffer_handler&) = delete;
+        vma_buffer_handler& operator=(const vma_buffer_handler&) = delete;
+        vma_buffer_handler(vma_buffer_handler&& src) noexcept
+        {
+            *this = std::move(src);
+        }
+
+        vma_buffer_handler& operator=(vma_buffer_handler&& src) noexcept
+        {
+            if (this == &src) {
+                return *this;
+            }
+            std::swap(m_buffer, src.m_buffer);
+            std::swap(m_allocation, src.m_allocation);
+            std::swap(m_allocator, src.m_allocator);
+            return *this;
+        }
+
+        VkResult init(VmaAllocator allocator, VkBufferCreateInfo* buffer_info, VmaAllocationCreateInfo* alloc_info)
+        {
+            destroy();
+            m_allocator = allocator;
+            return vmaCreateBuffer(m_allocator, buffer_info, alloc_info, &m_buffer, &m_allocation, &m_alloc_info);
+        }
+
+        void destroy()
+        {
+            if (m_allocator != nullptr && m_buffer != nullptr && m_allocation != nullptr) {
+                vmaDestroyBuffer(m_allocator, m_buffer, m_allocation);
+
+                m_allocator = nullptr;
+                m_buffer = nullptr;
+                m_allocation = nullptr;
+            }
+        }
+
+        const VmaAllocationInfo& get_alloc_info() const
+        {
+            return m_alloc_info;
+        }
+
+        operator VkBuffer() const
+        {
+            return m_buffer;
+        }
+
+        operator VmaAllocation() const
+        {
+            return m_allocation;
+        }
+
+        operator const VkBuffer*() const
+        {
+            return &m_buffer;
+        }
+
+        operator const VmaAllocation*() const
+        {
+            return &m_allocation;
+        }
+
+    private:
+        VmaAllocator m_allocator{nullptr};
+        VkBuffer m_buffer{nullptr};
+        VmaAllocation m_allocation{nullptr};
+        VmaAllocationInfo m_alloc_info{};
+    };
 
     using img_view_handler =
         default_device_scoped_handler<VkImageViewCreateInfo, VkImageView, vkCreateImageView, vkDestroyImageView>;

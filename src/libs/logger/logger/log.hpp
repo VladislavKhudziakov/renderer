@@ -3,14 +3,27 @@
 #include <iostream>
 
 #ifndef NDEBUG
-    #define LOG_DEBUG(str) std::cout << logger::color_modifier(logger::FG_BLUE) << "[DEBUG] " << (str) << logger::color_modifier(logger::FG_DEFAULT) << std::endl
+    #define LOG_DEBUG(...) logger::print_variadic(std::cout, logger::color_modifier(logger::FG_BLUE), "[DEBUG] ", __VA_ARGS__, logger::color_modifier(logger::FG_DEFAULT));
 #else
     #define LOG_DEBUG(str)
 #endif
 
-#define LOG_ERROR(str) std::cout << logger::color_modifier(logger::FG_RED) << "[ERROR] " << (str) << logger::color_modifier(logger::FG_DEFAULT) << std::endl
-#define LOG_WARN(str) std::cout << logger::color_modifier(logger::FG_YELLOW) << "[WARNING] " << (str) << logger::color_modifier(logger::FG_DEFAULT) << std::endl
-#define LOG_INFO(str) std::cout << "[INFO] " << (str) << std::endl
+#define LOG_ERROR(...) logger::print_variadic(std::cout, logger::color_modifier(logger::FG_RED), "[ERROR] ", __VA_ARGS__, logger::color_modifier(logger::FG_DEFAULT));
+#define LOG_WARN(...) logger::print_variadic(std::cout, logger::color_modifier(logger::FG_YELLOW), "[WARNING] ", __VA_ARGS__, logger::color_modifier(logger::FG_DEFAULT));
+#define LOG_INFO(...) logger::print_variadic(std::cout, "[INFO] ", __VA_ARGS__);
+
+
+#define LOGGER_COLOR_MODIFIER_FG_RED "\033[31m"
+#define LOGGER_COLOR_MODIFIER_FG_GREEN "\033[32m"
+#define LOGGER_COLOR_MODIFIER_FG_YELLOW "\033[33m"
+#define LOGGER_COLOR_MODIFIER_FG_BLUE "\033[34m"
+#define LOGGER_COLOR_MODIFIER_FG_DEFAULT "\033[39m"
+
+#define LOGGER_COLOR_MODIFIER_BG_RED "\033[41m"
+#define LOGGER_COLOR_MODIFIER_BG_GREEN "\033[42m"
+#define LOGGER_COLOR_MODIFIER_BG_YELLOW "\033[43m"
+#define LOGGER_COLOR_MODIFIER_BG_BLUE "\033[44m"
+#define LOGGER_COLOR_MODIFIER_BG_DEFAULT "\033[49m"
 
 
 namespace logger
@@ -37,5 +50,12 @@ namespace logger
             return os << "\033[" << mod.code << "m";
         }
     };
+
+    template <typename OS, typename... Args>
+    void print_variadic(OS& os, Args&&... args)
+    {
+        ((os << args), ...);
+        os << std::endl;
+    }
 }
 

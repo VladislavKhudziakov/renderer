@@ -3,6 +3,15 @@
 #include "context.hpp"
 
 #include <logger/log.hpp>
+#include <cstdio>
+
+#ifndef VMA_IMPLEMENTATION
+#define VMA_IMPLEMENTATION
+#ifndef NDEBUG
+#define VMA_DEBUG_LOG(format, ...) printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT"\n" __VA_OPT__(,) __VA_ARGS__);
+#endif
+#include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
+#endif
 
 #include <vector>
 #include <cstring>
@@ -222,12 +231,12 @@ errors::error vk_utils::context::init(
     ctx->m_app_name = app_name;
 
     if (const auto err = init_instance(app_name, context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to initialize VK context. " + err.message);
+        LOG_ERROR("failed to initialize VK context. ", err.message);
         return err;
     }
 
     if (const auto err = init_debug_messenger(context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to initialize VK context. " + err.message);
+        LOG_ERROR("failed to initialize VK context. ", err.message);
         return err;
     }
 
@@ -237,17 +246,22 @@ errors::error vk_utils::context::init(
     }
 
     if (const auto err = select_physical_device(context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to initialize VK context. " + err.message);
+        LOG_ERROR("failed to initialize VK context. ", err.message);
         return err;
     }
 
     if (const auto err = init_device(context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to create VK context. " + err.message);
+        LOG_ERROR("failed to init VK device. ", err.message);
+        return err;
+    }
+
+    if (const auto err = init_memory_allocator(); err != errors::OK) {
+        LOG_ERROR("failed to init VK mem allocator. ", err.message);
         return err;
     }
 
     if (const auto err = request_queues(); err != errors::OK) {
-        LOG_ERROR("failed to create VK context. " + err.message);
+        LOG_ERROR("failed to request device queue. ", err.message);
         return err;
     }
 
@@ -540,6 +554,22 @@ errors::error vk_utils::context::init_device(const context_init_info& context_in
 }
 
 
+errors::error vk_utils::context::init_memory_allocator()
+{
+    VmaAllocatorCreateInfo allocator_create_info {};
+    allocator_create_info.device = ctx->device();
+    allocator_create_info.instance = ctx->instance();
+    allocator_create_info.physicalDevice = ctx->gpu();
+    allocator_create_info.vulkanApiVersion = VK_API_VERSION_1_0;
+
+    if (auto err = ctx->m_allocator.init(&allocator_create_info); err != VK_SUCCESS) {
+        return ERROR_FATAL(err, "cannot initialize allocator.");
+    }
+
+    return errors::OK;
+}
+
+
 errors::error vk_utils::context::request_queues()
 {
     uint32_t curr_queue{0};
@@ -556,6 +586,7 @@ errors::error vk_utils::context::request_queues()
 
 vk_utils::context::~context()
 {
+    m_allocator.destroy();
     m_device.destroy();
     vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
     m_debug_messenger.destroy();
@@ -634,4 +665,10 @@ VkDebugUtilsMessengerCreateInfoEXT vk_utils::context::get_debug_messenger_create
     messenger_create_info.pfnUserCallback = cb;
 
     return messenger_create_info;
+}
+
+
+VmaAllocator vk_utils::context::allocator() const
+{
+    return m_allocator;
 }

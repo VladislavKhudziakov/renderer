@@ -60,6 +60,7 @@ namespace vk_utils
         static const context& get();
 
         VkDevice device() const;
+        VmaAllocator allocator() const;
         VkPhysicalDevice gpu() const;
         VkInstance instance() const;
         VkQueue queue(queue_type type) const;
@@ -75,13 +76,17 @@ namespace vk_utils
         static errors::error select_physical_device(const context_init_info& info);
         static errors::error init_device(const context_init_info& info);
         static errors::error request_queues();
+        static errors::error init_memory_allocator();
 
         instance_handler m_instance{};
 
         VkPhysicalDevice m_physical_device{};
         VkSurfaceKHR m_surface{};
-        device_handler m_device{};
+
         debug_messenger_handler m_debug_messenger{};
+
+        device_handler m_device{};
+        vma_allocator_handler m_allocator{};
 
         int32_t m_queue_families_indices[QUEUE_TYPE_SIZE]{};
         VkQueue m_queues[QUEUE_TYPE_SIZE]{};

@@ -7,4 +7,5 @@ make_app(
     LIB_TYPE
         STATIC
     DEPENDS
-        errors)
+        errors
+        VulkanMemoryAllocator)
