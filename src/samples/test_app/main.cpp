@@ -757,69 +757,11 @@ errors::error create_buffer(
         vmaFlushAllocation(
             vk_utils::context::get().allocator(),
             buffer,
-            buffer.get_alloc_info().offset,
-            buffer.get_alloc_info().size);
+            0,
+            VK_WHOLE_SIZE);
     }
 
     return  errors::OK;
-}
-
-
-errors::error create_buffer(
-    vk_utils::buffer_handler& buffer,
-    VkBufferUsageFlags buffer_usage,
-    vk_utils::device_memory_handler& memory,
-    VkMemoryPropertyFlags memory_props,
-    uint32_t size,
-    void* data = nullptr)
-{
-    VkBufferCreateInfo buffer_info{};
-    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.pNext = nullptr;
-
-    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    const uint32_t queue_family_idx = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
-    buffer_info.pQueueFamilyIndices = &queue_family_idx;
-    buffer_info.queueFamilyIndexCount = 1;
-    buffer_info.size = size;
-    buffer_info.usage = buffer_usage;
-
-    if (auto err_code = buffer.init(vk_utils::context::get().device(), &buffer_info); err_code != VK_SUCCESS) {
-        return ERROR(err_code, "cannot init buffer");
-    }
-
-    auto alloc_info = vk_utils::context::get().get_memory_alloc_info(buffer, memory_props);
-
-    VkMemoryAllocateInfo memory_info{};
-    memory_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    memory_info.memoryTypeIndex = alloc_info.memory_type_index;
-    memory_info.allocationSize = alloc_info.allocation_size;
-
-    if (auto err_code = memory.init(vk_utils::context::get().device(), &memory_info); err_code != VK_SUCCESS) {
-        return ERROR(err_code, "cannot innit memory");
-    }
-
-    if (data != nullptr && memory_props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
-        void* map_ptr{nullptr};
-        vkMapMemory(vk_utils::context::get().device(), memory, 0, VK_WHOLE_SIZE, 0, &map_ptr);
-        std::memcpy(map_ptr, data, size);
-        if (memory_props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
-            vkUnmapMemory(vk_utils::context::get().device(), memory);
-        } else {
-            VkMappedMemoryRange range{};
-            range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-            range.pNext = nullptr;
-            range.size = VK_WHOLE_SIZE;
-            range.offset = 0;
-            range.memory = memory;
-            vkFlushMappedMemoryRanges(vk_utils::context::get().device(), 1, &range);
-        }
-        vkUnmapMemory(vk_utils::context::get().device(), memory);
-    }
-
-    vkBindBufferMemory(vk_utils::context::get().device(), buffer, memory, 0);
-
-    return errors::OK;
 }
 
 
