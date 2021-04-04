@@ -11,6 +11,7 @@ make_app(
     DEPENDS
         glfw
         shaderc
+        glm_
         ${VK_DEPS_LIBS}
         vk_utils
         base_app

@@ -217,68 +217,63 @@ namespace vk_utils
     };
 
 
-    class cmd_buffers_handler
+    template<typename InitializerType, typename PoolType, typename AllocStructType, typename StructType, typename FreeResType, VkResult(*alloc_function)(InitializerType, const AllocStructType*, StructType*), FreeResType(*free_function)(InitializerType, PoolType, uint32_t, const StructType*)>
+    class allocated_handler
     {
     public:
-        cmd_buffers_handler() = default;
-        ~cmd_buffers_handler()
+        allocated_handler() = default;
+        ~allocated_handler()
         {
             destroy();
         }
-        cmd_buffers_handler(const cmd_buffers_handler&) = delete;
-        cmd_buffers_handler& operator=(const cmd_buffers_handler&) = delete;
-        cmd_buffers_handler(cmd_buffers_handler&& src) noexcept
+        allocated_handler(const allocated_handler&) = delete;
+        allocated_handler& operator=(const allocated_handler&) = delete;
+        allocated_handler(allocated_handler&& src) noexcept
         {
             *this = std::move(src);
         }
-        cmd_buffers_handler& operator=(cmd_buffers_handler&& src) noexcept
+        allocated_handler& operator=(allocated_handler&& src) noexcept
         {
             if (this == &src) {
                 return *this;
             }
 
             std::swap(m_handlers, src.m_handlers);
-            std::swap(m_device, src.m_device);
-            std::swap(m_cmd_pool, src.m_cmd_pool);
+            std::swap(m_initializer, src.m_initializer);
+            std::swap(m_pool, src.m_pool);
 
             return *this;
         }
 
-        VkResult init(VkDevice device, VkCommandBufferAllocateInfo* info)
+        VkResult init(InitializerType initializer, PoolType pool, AllocStructType* info, uint32_t handlers_count)
         {
-            m_device = device;
-            m_handlers.resize(info->commandBufferCount);
-            m_cmd_pool = info->commandPool;
-            return vkAllocateCommandBuffers(m_device, info, m_handlers.data());
-        }
-
-        VkResult reset(VkDevice i, VkCommandBufferAllocateInfo* info)
-        {
-            destroy();
-            return init(i, info);
+            m_initializer = initializer;
+            m_handlers.resize(handlers_count);
+            m_pool = pool;
+            return alloc_function(m_initializer, info, m_handlers.data());
         }
 
         void destroy()
         {
-            if (m_device != nullptr && m_cmd_pool != nullptr && !m_handlers.empty()) {
-                vkFreeCommandBuffers(m_device, m_cmd_pool, m_handlers.size(), m_handlers.data());
+            if (m_initializer != nullptr && m_pool != nullptr && !m_handlers.empty()) {
+                free_function(m_initializer, m_pool, m_handlers.size(), m_handlers.data());
                 m_handlers.clear();
-                m_device = nullptr;
-                m_cmd_pool = nullptr;
+                m_initializer = nullptr;
+                m_pool = nullptr;
             }
         }
 
-        uint32_t buffers_count() const
+        uint32_t handlers_count() const
         {
             return m_handlers.size();
         }
 
-        operator const VkCommandBuffer*() const
+        operator const StructType*() const
         {
             return m_handlers.data();
         }
 
-        VkCommandBuffer operator[](size_t index)
+        StructType operator[](size_t index)
         {
             if (index < m_handlers.size()) {
                 return m_handlers[index];
@@ -287,9 +282,9 @@ namespace vk_utils
         }
 
     private:
-        VkDevice m_device{nullptr};
-        VkCommandPool m_cmd_pool{nullptr};
-        std::vector<VkCommandBuffer> m_handlers{};
+        InitializerType m_initializer{nullptr};
+        PoolType m_pool{nullptr};
+        std::vector<StructType> m_handlers{};
     };
 
 
@@ -511,9 +506,6 @@ namespace vk_utils
     using framebuffer_handler =
         default_device_scoped_handler<VkFramebufferCreateInfo, VkFramebuffer, vkCreateFramebuffer, vkDestroyFramebuffer>;
 
-    using cmd_pool_handler =
-        default_device_scoped_handler<VkCommandPoolCreateInfo, VkCommandPool, vkCreateCommandPool, vkDestroyCommandPool>;
-
     using semaphore_handler =
         default_device_scoped_handler<VkSemaphoreCreateInfo, VkSemaphore, vkCreateSemaphore, vkDestroySemaphore>;
 
@@ -528,6 +520,21 @@ namespace vk_utils
 
     using device_memory_handler =
         default_device_scoped_handler<VkMemoryAllocateInfo, VkDeviceMemory, vkAllocateMemory, vkFreeMemory>;
+
+    using descriptor_set_layout_handler =
+        default_device_scoped_handler<VkDescriptorSetLayoutCreateInfo, VkDescriptorSetLayout, vkCreateDescriptorSetLayout, vkDestroyDescriptorSetLayout>;
+
+    using cmd_pool_handler =
+        default_device_scoped_handler<VkCommandPoolCreateInfo, VkCommandPool, vkCreateCommandPool, vkDestroyCommandPool>;
+
+    using cmd_buffers_handler =
+        allocated_handler<VkDevice, VkCommandPool, VkCommandBufferAllocateInfo, VkCommandBuffer, void, vkAllocateCommandBuffers, vkFreeCommandBuffers>;
+
+    using descriptor_pool_handler =
+        default_device_scoped_handler<VkDescriptorPoolCreateInfo, VkDescriptorPool, vkCreateDescriptorPool, vkDestroyDescriptorPool>;
+
+    using descriptor_set_handler =
+        allocated_handler<VkDevice, VkDescriptorPool, VkDescriptorSetAllocateInfo, VkDescriptorSet, VkResult, vkAllocateDescriptorSets, vkFreeDescriptorSets>;
 
     using surface_handler =
         default_instance_scoped_handler<VK_UTILS_SURFACE_CREATE_INFO_TYPE, VkSurfaceKHR, VK_UTILS_SURFACE_CREATE_FUNCTION, vkDestroySurfaceKHR>;

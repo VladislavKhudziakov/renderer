@@ -4,6 +4,12 @@
 
 #include <app/base_app.hpp>
 #include <logger/log.hpp>
+#include <vk_utils/context.hpp>
+
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <shaderc/shaderc.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -13,9 +19,6 @@
 #include <optional>
 #include <string>
 #include <vector>
-
-#include <vk_utils/context.hpp>
-#include <shaderc/shaderc.hpp>
 
 const char* shaders_paths_spv[]{
     "./shaders/triangle/triangle.vert.glsl.spv",
@@ -38,6 +41,13 @@ vk_utils::vma_buffer_handler g_vertex_buffer;
 vk_utils::vma_buffer_handler g_vertex_staging_buffer;
 vk_utils::vma_buffer_handler g_index_buffer;
 vk_utils::vma_buffer_handler g_index_staging_buffer;
+
+std::vector<vk_utils::vma_buffer_handler> g_global_uniform_buffer;
+
+vk_utils::descriptor_set_layout_handler g_ubo_descriptor_set_layout;
+
+vk_utils::descriptor_pool_handler g_descriptor_pool;
+vk_utils::descriptor_set_handler g_descriptor_sets;
 
 vk_utils::shader_module_handler g_shader_modules[std::size(shaders_paths_spv)];
 
@@ -354,11 +364,11 @@ private:
             }
 
             return m_swapchain.reset(vk_utils::context::get().device(), &*m_swapchain_create_info);
-//            if (res == VK_SUCCESS) {
-//                vkDestroySwapchainKHR(vk_utils::context::get().device(), m_swapchain_create_info->oldSwapchain, nullptr);
-//            }
+            //            if (res == VK_SUCCESS) {
+            //                vkDestroySwapchainKHR(vk_utils::context::get().device(), m_swapchain_create_info->oldSwapchain, nullptr);
+            //            }
 
-//            return res;
+            //            return res;
         }
 
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_utils::context::get().gpu(), vk_utils::context::get().surface(), &m_surace_capabilities);
@@ -725,6 +735,15 @@ uint16_t indices[] = {
     0, 1, 2, 0, 2, 3};
 
 
+struct global_ubo
+{
+    glm::mat4 projection = glm::identity<glm::mat4>();
+    glm::mat4 view = glm::identity<glm::mat4>();
+    glm::mat4 model = glm::identity<glm::mat4>();
+    glm::mat4 mvp = glm::identity<glm::mat4>();
+};
+
+
 errors::error create_buffer(
     vk_utils::vma_buffer_handler& buffer,
     VkBufferUsageFlags buffer_usage,
@@ -767,7 +786,7 @@ errors::error create_buffer(
 }
 
 
-int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
+int32_t init_pipeline(const hello_triangle_app* app)
 {
     static VkShaderStageFlagBits shader_stages[std::size(shaders_paths_glsl)];
     static VkPipelineShaderStageCreateInfo
@@ -775,10 +794,6 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
 
 
     static bool shaders_loaded = false;
-
-    if (reset) {
-        shaders_loaded = false;
-    }
 
     if (!shaders_loaded) {
         for (int i = 0; i < std::size(shaders_paths_glsl); ++i) {
@@ -801,10 +816,6 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
     }
 
     static bool vert_buffer_initialized = false;
-
-    if (reset) {
-        vert_buffer_initialized = false;
-    }
 
     if (!vert_buffer_initialized) {
         if (create_buffer(g_vertex_buffer, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, sizeof(vert_data)) != errors::OK) {
@@ -933,18 +944,43 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
     dyn_state_info.pDynamicStates = dyn_state;
     dyn_state_info.dynamicStateCount = std::size(dyn_state);
 
-    VkPipelineLayoutCreateInfo layout_create_info{};
-    layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout_create_info.pNext = nullptr;
-    layout_create_info.pPushConstantRanges = nullptr;
-    layout_create_info.pushConstantRangeCount = 0;
-    layout_create_info.pSetLayouts = nullptr;
-    layout_create_info.setLayoutCount = 0;
+    VkDescriptorSetLayoutBinding descriptor_set_layout_binding[] = {
+        {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .pImmutableSamplers = nullptr,
+        }};
 
-    if (auto err_code =
-            g_pipeline_layout.init(vk_utils::context::get().device(), &layout_create_info);
-        err_code != VK_SUCCESS) {
-        return -1;
+    static bool pipeline_layput_created = false;
+
+    if (!pipeline_layput_created) {
+        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_info{};
+        descriptor_set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        descriptor_set_layout_info.pNext = nullptr;
+        descriptor_set_layout_info.pBindings = descriptor_set_layout_binding;
+        descriptor_set_layout_info.bindingCount = std::size(descriptor_set_layout_binding);
+
+        if (auto err_code = g_ubo_descriptor_set_layout.init(vk_utils::context::get().device(), &descriptor_set_layout_info); err_code != VK_SUCCESS) {
+            return -1;
+        }
+
+        VkPipelineLayoutCreateInfo layout_create_info{};
+        layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout_create_info.pNext = nullptr;
+        layout_create_info.pPushConstantRanges = nullptr;
+        layout_create_info.pushConstantRangeCount = 0;
+        layout_create_info.pSetLayouts = g_ubo_descriptor_set_layout;
+        layout_create_info.setLayoutCount = 1;
+
+        if (auto err_code =
+                g_pipeline_layout.init(vk_utils::context::get().device(), &layout_create_info);
+            err_code != VK_SUCCESS) {
+            return -1;
+        }
+
+        pipeline_layput_created = true;
     }
 
     VkGraphicsPipelineCreateInfo pipeline_create_info{};
@@ -978,10 +1014,6 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
 
     static bool cmd_pool_created = false;
 
-    if (reset) {
-        cmd_pool_created = false;
-    }
-
     if (!cmd_pool_created) {
         VkCommandPoolCreateInfo cmd_pool_create_info{};
         cmd_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -1002,7 +1034,7 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
     cmd_buff_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmd_buff_alloc_info.commandPool = g_cmd_pool;
 
-    if (const auto err_code = g_draw_cmd_buffers.init(vk_utils::context::get().device(), &cmd_buff_alloc_info); err_code != VK_SUCCESS) {
+    if (const auto err_code = g_draw_cmd_buffers.init(vk_utils::context::get().device(), g_cmd_pool, &cmd_buff_alloc_info, cmd_buff_alloc_info.commandBufferCount); err_code != VK_SUCCESS) {
         return -1;
     }
 
@@ -1011,7 +1043,7 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
     if (!vert_buffer_copied) {
         cmd_buff_alloc_info.commandBufferCount = 1;
 
-        if (const auto err_code = g_data_copy_cmd_buffers.init(vk_utils::context::get().device(), &cmd_buff_alloc_info); err_code != VK_SUCCESS) {
+        if (const auto err_code = g_data_copy_cmd_buffers.init(vk_utils::context::get().device(), g_cmd_pool, &cmd_buff_alloc_info, cmd_buff_alloc_info.commandBufferCount); err_code != VK_SUCCESS) {
             return -1;
         }
 
@@ -1033,6 +1065,74 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
         vkEndCommandBuffer(g_data_copy_cmd_buffers[0]);
 
         vert_buffer_copied = true;
+    }
+
+
+    static bool ubos_created = false;
+
+    if (!ubos_created) {
+        g_global_uniform_buffer.resize(fbs.size());
+
+        for (auto& ubo : g_global_uniform_buffer) {
+            create_buffer(ubo, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo));
+        }
+
+        ubos_created = true;
+    }
+
+    static bool descriptors_sets_created = false;
+
+    if (!descriptors_sets_created) {
+        VkDescriptorPoolCreateInfo descriptor_pool_info{};
+        descriptor_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        descriptor_pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        descriptor_pool_info.pNext = nullptr;
+
+        VkDescriptorPoolSize pools_size[] = {
+            {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+             .descriptorCount = static_cast<uint32_t>(fbs.size())}};
+
+        descriptor_pool_info.pPoolSizes = pools_size;
+        descriptor_pool_info.poolSizeCount = std::size(pools_size);
+        descriptor_pool_info.maxSets = fbs.size();
+
+        if (const auto err_code = g_descriptor_pool.init(vk_utils::context::get().device(), &descriptor_pool_info); err_code != VK_SUCCESS) {
+            return -1;
+        }
+
+        std::vector<VkDescriptorSetLayout> desc_layouts{fbs.size(), g_ubo_descriptor_set_layout};
+        VkDescriptorSetAllocateInfo descriptor_alloc_info{};
+        descriptor_alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        descriptor_alloc_info.pNext = nullptr;
+        descriptor_alloc_info.pSetLayouts = desc_layouts.data();
+        descriptor_alloc_info.descriptorSetCount = fbs.size();
+        descriptor_alloc_info.descriptorPool = g_descriptor_pool;
+
+        if (const auto err_code = g_descriptor_sets.init(vk_utils::context::get().device(), g_descriptor_pool, &descriptor_alloc_info, descriptor_alloc_info.descriptorSetCount); err_code != VK_SUCCESS) {
+            return -1;
+        }
+
+        VkWriteDescriptorSet write_desc_set{};
+        write_desc_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write_desc_set.pNext = nullptr;
+        write_desc_set.dstBinding = 0;
+        write_desc_set.descriptorCount = 1;
+        write_desc_set.dstArrayElement = 0;
+        write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+
+        for (int i = 0; i < fbs.size(); ++i) {
+            write_desc_set.dstSet = g_descriptor_sets[i];
+            VkDescriptorBufferInfo buffer_info{};
+
+            buffer_info.buffer = g_global_uniform_buffer[i];
+            buffer_info.offset = 0;
+            buffer_info.range = VK_WHOLE_SIZE;
+            write_desc_set.pBufferInfo = &buffer_info;
+
+            vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &write_desc_set, 0, nullptr);
+        }
+
+        descriptors_sets_created = true;
     }
 
     const VkCommandBuffer* cmd_buffers = g_draw_cmd_buffers;
@@ -1068,7 +1168,9 @@ int32_t init_pipeline(const hello_triangle_app* app, bool reset = false)
 
         vkCmdBindPipeline(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline);
         VkBuffer v_buffer[] = {g_vertex_buffer};
+        VkDescriptorSet desc_sets[] = {g_descriptor_sets[i]};
         VkDeviceSize offsets[] = {0};
+        vkCmdBindDescriptorSets(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline_layout, 0, 1, desc_sets, 0, nullptr);
         vkCmdBindVertexBuffers(cmd_buffers[i], 0, 1, v_buffer, offsets);
         vkCmdBindIndexBuffer(cmd_buffers[i], g_index_buffer, 0, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(cmd_buffers[i], std::size(indices), 1, 0, 0, 0);
@@ -1093,9 +1195,26 @@ int main(int argn, const char** argv)
 
     app.set_on_update_callback([](const hello_triangle_app* app, const VkCommandBuffer** cmd_bufs, uint32_t* bufs_count) {
         static bool is_first = true;
+
+        static global_ubo ubo_data{};
+        ubo_data.model = glm::rotate(ubo_data.model, glm::radians(0.1f), glm::vec3{0.0f, 0.0f, 1.0f});
+        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(app->get_window_size().width), float(app->get_window_size().height), 0.01f, 10.0f);
+        ubo_data.projection[1][1] *= -1.0f;
+        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 0.0f, -1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+        ubo_data.mvp = ubo_data.model * ubo_data.view * ubo_data.projection;
+
+        auto& ubo = g_global_uniform_buffer[app->get_current_swapchain_img_index()];
+        void* mapped_data;
+        vmaMapMemory(vk_utils::context::get().allocator(), ubo, &mapped_data);
+        std::memcpy(mapped_data, &ubo_data, sizeof(ubo_data));
+        vmaFlushAllocation(vk_utils::context::get().allocator(), ubo, 0, VK_WHOLE_SIZE);
+        vmaUnmapMemory(vk_utils::context::get().allocator(), ubo);
+
+        static VkCommandBuffer handlers[2];
+        handlers[1] = g_draw_cmd_buffers[app->get_current_swapchain_img_index()];
+
         if (is_first) {
-            static VkCommandBuffer handlers[] = {
-                g_data_copy_cmd_buffers[0], g_draw_cmd_buffers[app->get_current_swapchain_img_index()]};
+            handlers[0] = g_data_copy_cmd_buffers[0];
             *cmd_bufs = handlers;
             *bufs_count = std::size(handlers);
             is_first = false;
@@ -1110,7 +1229,6 @@ int main(int argn, const char** argv)
 
     app.set_on_resize_callback([](const hello_triangle_app* app) {
         g_draw_cmd_buffers.destroy();
-        g_pipeline_layout.destroy();
         g_pipeline.destroy();
 
         return init_pipeline(app);
@@ -1128,6 +1246,12 @@ int main(int argn, const char** argv)
         g_vertex_staging_buffer.destroy();
         g_index_buffer.destroy();
         g_index_staging_buffer.destroy();
+
+        g_global_uniform_buffer.clear();
+        g_ubo_descriptor_set_layout.destroy();
+
+        g_descriptor_sets.destroy();
+        g_descriptor_pool.destroy();
 
         for (auto& m : g_shader_modules) {
             m.destroy();
