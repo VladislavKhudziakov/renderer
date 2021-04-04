@@ -19,72 +19,72 @@ namespace vk_utils
         inline void vkDestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT pMessenger, const VkAllocationCallbacks* pAllocator)
         {
             auto function_impl = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-//            function_impl(instance, pMessenger, pAllocator);
+            //            function_impl(instance, pMessenger, pAllocator);
         }
-    }
+    } // namespace detail
 
 
-    template<typename InitStructType, typename StructType, VkResult (*init_func)(VkDevice, const InitStructType*, const VkAllocationCallbacks*, StructType*), void (*destroy_func)(VkDevice, StructType, const VkAllocationCallbacks*)>
-    class default_device_scoped_handler
+    template<typename InitializerType, typename InitStructType, typename StructType, VkResult (*init_func)(InitializerType, const InitStructType*, const VkAllocationCallbacks*, StructType*), void (*destroy_func)(InitializerType, StructType, const VkAllocationCallbacks*)>
+    class vulkan_base_handler
     {
     public:
-        default_device_scoped_handler() = default;
-        ~default_device_scoped_handler()
+        vulkan_base_handler() = default;
+        ~vulkan_base_handler()
         {
             destroy();
         }
-        default_device_scoped_handler(const default_device_scoped_handler&) = delete;
-        default_device_scoped_handler& operator=(const default_device_scoped_handler&) = delete;
-        default_device_scoped_handler(default_device_scoped_handler&& src) noexcept
+        vulkan_base_handler(const vulkan_base_handler&) = delete;
+        vulkan_base_handler& operator=(const vulkan_base_handler&) = delete;
+        vulkan_base_handler(vulkan_base_handler&& src) noexcept
         {
             *this = std::move(src);
         }
 
-        default_device_scoped_handler& operator=(default_device_scoped_handler&& src) noexcept
+        vulkan_base_handler& operator=(vulkan_base_handler&& src) noexcept
         {
             if (this == &src) {
                 return *this;
             }
             std::swap(m_handler, src.m_handler);
-            std::swap(m_device, src.m_device);
+            std::swap(m_initializer, src.m_initializer);
             return *this;
         }
 
-        VkResult init(VkDevice device, InitStructType* info)
+        virtual VkResult init(InitializerType initializer, InitStructType* info)
         {
-            m_device = device;
-            return init_func(m_device, info, nullptr, &m_handler);
+            m_initializer = initializer;
+            return init_func(m_initializer, info, nullptr, &m_handler);
         }
 
-        VkResult reset(VkDevice device, InitStructType* info)
+        virtual VkResult reset(InitializerType initializer, InitStructType* info)
         {
-            VkDevice old_device = m_device;
+            InitializerType old_initializer = m_initializer;
             StructType old_handler = m_handler;
 
-            auto init_res = init(device, info);
+            auto init_res = init(initializer, info);
 
             if (init_res == VK_SUCCESS) {
-                destroy_impl(old_device, old_handler);
+                destroy_impl(old_initializer, old_handler);
             } else {
-                m_device = old_device;
+                m_initializer = old_initializer;
                 m_handler = old_handler;
             }
 
             return init_res;
         }
 
-        void reset(VkDevice device, StructType handler)
+        virtual void reset(InitializerType initializer, StructType handler)
         {
             destroy();
-            m_device = device;
+            m_initializer = initializer;
             m_handler = handler;
         }
 
-        void destroy()
+        virtual void destroy()
         {
-            destroy_impl(m_device, m_handler);
+            destroy_impl(m_initializer, m_handler);
             m_handler = nullptr;
-            m_device = nullptr;
+            m_initializer = nullptr;
         }
 
         operator StructType() const
@@ -98,94 +98,27 @@ namespace vk_utils
         }
 
     private:
-        void destroy_impl(VkDevice device, StructType handler)
+        void destroy_impl(InitializerType initializer, StructType handler)
         {
-            if (device != nullptr && handler != nullptr) {
-                destroy_func(device, handler, nullptr);
+            if (initializer != nullptr && handler != nullptr) {
+                destroy_func(initializer, handler, nullptr);
             }
         }
 
-        VkDevice m_device{nullptr};
+    protected:
+        InitializerType m_initializer{nullptr};
         StructType m_handler{nullptr};
     };
 
 
-    template<typename InitStructType, typename StructType, VkResult (*init_func)(VkInstance, const InitStructType*, const VkAllocationCallbacks*, StructType*), void (*destroy_func)(VkInstance, StructType, const VkAllocationCallbacks*)>
-    class default_instance_scoped_handler
+    template<typename InitStructType, typename StructType, VkResult (*init_func)(VkDevice, const InitStructType*, const VkAllocationCallbacks*, StructType*), void (*destroy_func)(VkDevice, StructType, const VkAllocationCallbacks*)>
+    class default_device_scoped_handler : public vulkan_base_handler<VkDevice, InitStructType, StructType, init_func, destroy_func>
     {
-    public:
-        default_instance_scoped_handler() = default;
-        ~default_instance_scoped_handler()
-        {
-            destroy();
-        }
-        default_instance_scoped_handler(const default_instance_scoped_handler&) = delete;
-        default_instance_scoped_handler& operator=(const default_instance_scoped_handler&) = delete;
-        default_instance_scoped_handler(default_instance_scoped_handler&& src) noexcept
-        {
-            *this = std::move(src);
-        }
+    };
 
-        default_instance_scoped_handler& operator=(default_instance_scoped_handler&& src) noexcept
-        {
-            if (this == &src) {
-                return *this;
-            }
-            std::swap(m_handler, src.m_handle);
-            std::swap(m_instance, src.m_initializator);
-            return *this;
-        }
-
-        VkResult init(VkInstance instance, InitStructType* info)
-        {
-            m_instance = instance;
-            auto r = init_func(m_instance, info, nullptr, &m_handler);
-            return r;
-        }
-
-        VkResult reset(VkInstance instance, InitStructType* info)
-        {
-            VkInstance old_instance = m_instance;
-            StructType old_handler = m_handler;
-
-            auto res = init(instance, info);
-
-            if (res == VK_SUCCESS) {
-                destroy_impl(old_instance, old_handler);
-            }
-
-            return res;
-        }
-
-        void reset(VkInstance instance, StructType handler)
-        {
-            destroy();
-            m_instance = instance;
-            m_handler = handler;
-        }
-
-        void destroy()
-        {
-            destroy_impl(m_instance, m_handler);
-            m_handler = nullptr;
-            m_instance = nullptr;
-        }
-
-        operator StructType() const
-        {
-            return m_handler;
-        }
-
-    private:
-        void destroy_impl(VkInstance instance, StructType handler)
-        {
-            if (instance != nullptr && handler != nullptr) {
-                destroy_func(instance, handler, nullptr);
-            }
-        }
-
-        VkInstance m_instance{nullptr};
-        StructType m_handler{nullptr};
+    template<typename InitStructType, typename StructType, VkResult (*init_func)(VkInstance, const InitStructType*, const VkAllocationCallbacks*, StructType*), void (*destroy_func)(VkInstance, StructType, const VkAllocationCallbacks*)>
+    class default_instance_scoped_handler : public vulkan_base_handler<VkInstance, InitStructType, StructType, init_func, destroy_func>
+    {
     };
 
 
@@ -330,6 +263,8 @@ namespace vk_utils
             if (m_device != nullptr && m_cmd_pool != nullptr && !m_handlers.empty()) {
                 vkFreeCommandBuffers(m_device, m_cmd_pool, m_handlers.size(), m_handlers.data());
                 m_handlers.clear();
+                m_device = nullptr;
+                m_cmd_pool = nullptr;
             }
         }
 
@@ -392,17 +327,30 @@ namespace vk_utils
 
         VkResult reset(VkDevice i, VkGraphicsPipelineCreateInfo* info)
         {
+            VkDevice old_device = m_device;
+            VkPipeline old_handler = m_handler;
+
+            auto res = init(i, info);
+
+            if (res == VK_SUCCESS) {
+                destroy_impl(old_device, old_handler);
+            }
+
+            return res;
+        }
+
+        void reset(VkDevice d, VkPipeline p)
+        {
             destroy();
-            return init(i, info);
+            m_device = d;
+            m_handler = p;
         }
 
         void destroy()
         {
-            if (m_device != nullptr && m_handler != nullptr) {
-                vkDestroyPipeline(m_device, m_handler, nullptr);
-                m_device = nullptr;
-                m_handler = nullptr;
-            }
+            destroy_impl(m_device, m_handler);
+            m_device = nullptr;
+            m_handler = nullptr;
         }
 
         operator VkPipeline() const
@@ -411,8 +359,15 @@ namespace vk_utils
         }
 
     private:
+        void destroy_impl(VkDevice device, VkPipeline pipeline)
+        {
+            if (device != nullptr && pipeline != nullptr) {
+                vkDestroyPipeline(device, pipeline, nullptr);
+            }
+        }
+
         VkDevice m_device{nullptr};
-        VkPipeline m_handler;
+        VkPipeline m_handler{nullptr};
     };
 
 
