@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vk_utils/defs.hpp>
 #include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
 
 #include <utility>
@@ -23,7 +24,7 @@ namespace vk_utils
     }
 
 
-    template<typename InitStructType, typename StuctType, VkResult (*init_func)(VkDevice, const InitStructType*, const VkAllocationCallbacks*, StuctType*), void (*destroy_func)(VkDevice, StuctType, const VkAllocationCallbacks*)>
+    template<typename InitStructType, typename StructType, VkResult (*init_func)(VkDevice, const InitStructType*, const VkAllocationCallbacks*, StructType*), void (*destroy_func)(VkDevice, StructType, const VkAllocationCallbacks*)>
     class default_device_scoped_handler
     {
     public:
@@ -44,46 +45,72 @@ namespace vk_utils
             if (this == &src) {
                 return *this;
             }
-            std::swap(m_handle, src.m_handle);
+            std::swap(m_handler, src.m_handler);
             std::swap(m_device, src.m_device);
             return *this;
         }
+
         VkResult init(VkDevice device, InitStructType* info)
         {
             m_device = device;
-            return init_func(m_device, info, nullptr, &m_handle);
+            return init_func(m_device, info, nullptr, &m_handler);
         }
+
         VkResult reset(VkDevice device, InitStructType* info)
         {
-            destroy();
-            return init(device, info);
+            VkDevice old_device = m_device;
+            StructType old_handler = m_handler;
+
+            auto init_res = init(device, info);
+
+            if (init_res == VK_SUCCESS) {
+                destroy_impl(old_device, old_handler);
+            } else {
+                m_device = old_device;
+                m_handler = old_handler;
+            }
+
+            return init_res;
         }
+
+        void reset(VkDevice device, StructType handler)
+        {
+            destroy();
+            m_device = device;
+            m_handler = handler;
+        }
+
         void destroy()
         {
-            if (m_device != nullptr && m_handle != nullptr) {
-                destroy_func(m_device, m_handle, nullptr);
-                m_handle = nullptr;
-                m_device = nullptr;
-            }
+            destroy_impl(m_device, m_handler);
+            m_handler = nullptr;
+            m_device = nullptr;
         }
 
-        operator StuctType() const
+        operator StructType() const
         {
-            return m_handle;
+            return m_handler;
         }
 
-        operator const StuctType*() const
+        operator const StructType*() const
         {
-            return &m_handle;
+            return &m_handler;
         }
 
     private:
+        void destroy_impl(VkDevice device, StructType handler)
+        {
+            if (device != nullptr && handler != nullptr) {
+                destroy_func(device, handler, nullptr);
+            }
+        }
+
         VkDevice m_device{nullptr};
-        StuctType m_handle{nullptr};
+        StructType m_handler{nullptr};
     };
 
 
-    template<typename InitStructType, typename StuctType, VkResult (*init_func)(VkInstance, const InitStructType*, const VkAllocationCallbacks*, StuctType*), void (*destroy_func)(VkInstance, StuctType, const VkAllocationCallbacks*)>
+    template<typename InitStructType, typename StructType, VkResult (*init_func)(VkInstance, const InitStructType*, const VkAllocationCallbacks*, StructType*), void (*destroy_func)(VkInstance, StructType, const VkAllocationCallbacks*)>
     class default_instance_scoped_handler
     {
     public:
@@ -104,38 +131,61 @@ namespace vk_utils
             if (this == &src) {
                 return *this;
             }
-            std::swap(m_handle, src.m_handle);
+            std::swap(m_handler, src.m_handle);
             std::swap(m_instance, src.m_initializator);
             return *this;
         }
+
         VkResult init(VkInstance instance, InitStructType* info)
         {
             m_instance = instance;
-            auto r = init_func(m_instance, info, nullptr, &m_handle);
+            auto r = init_func(m_instance, info, nullptr, &m_handler);
             return r;
         }
+
         VkResult reset(VkInstance instance, InitStructType* info)
         {
-            destroy();
-            return init(instance, info);
-        }
-        void destroy()
-        {
-            if (m_instance != nullptr && m_handle != nullptr) {
-                destroy_func(m_instance, m_handle, nullptr);
-                m_handle = nullptr;
-                m_instance = nullptr;
+            VkInstance old_instance = m_instance;
+            StructType old_handler = m_handler;
+
+            auto res = init(instance, info);
+
+            if (res == VK_SUCCESS) {
+                destroy_impl(old_instance, old_handler);
             }
+
+            return res;
         }
 
-        operator StuctType() const
+        void reset(VkInstance instance, StructType handler)
         {
-            return m_handle;
+            destroy();
+            m_instance = instance;
+            m_handler = handler;
+        }
+
+        void destroy()
+        {
+            destroy_impl(m_instance, m_handler);
+            m_handler = nullptr;
+            m_instance = nullptr;
+        }
+
+        operator StructType() const
+        {
+            return m_handler;
         }
 
     private:
+        void destroy_impl(VkInstance instance, StructType handler)
+        {
+            if (instance != nullptr && handler != nullptr) {
+                destroy_func(instance, handler, nullptr);
+            }
+        }
+
         VkInstance m_instance{nullptr};
-        StuctType m_handle{nullptr};
+        StructType m_handler{nullptr};
     };
 
 
@@ -523,6 +573,9 @@ namespace vk_utils
 
     using device_memory_handler =
         default_device_scoped_handler<VkMemoryAllocateInfo, VkDeviceMemory, vkAllocateMemory, vkFreeMemory>;
+
+    using surface_handler =
+        default_instance_scoped_handler<VK_UTILS_SURFACE_CREATE_INFO_TYPE, VkSurfaceKHR, VK_UTILS_SURFACE_CREATE_FUNCTION, vkDestroySurfaceKHR>;
 
     using debug_messenger_handler =
         default_instance_scoped_handler<VkDebugUtilsMessengerCreateInfoEXT, VkDebugUtilsMessengerEXT, detail::vkCreateDebugUtilsMessengerEXT, detail::vkDestroyDebugUtilsMessengerEXT>;

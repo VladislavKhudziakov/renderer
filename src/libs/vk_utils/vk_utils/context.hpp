@@ -79,11 +79,10 @@ namespace vk_utils
         static errors::error init_memory_allocator();
 
         instance_handler m_instance{};
+        surface_handler m_surface{};
+        debug_messenger_handler m_debug_messenger{};
 
         VkPhysicalDevice m_physical_device{};
-        VkSurfaceKHR m_surface{};
-
-        debug_messenger_handler m_debug_messenger{};
 
         device_handler m_device{};
         vma_allocator_handler m_allocator{};

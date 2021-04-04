@@ -353,13 +353,12 @@ private:
                     std::clamp(m_surace_capabilities.minImageCount + 1, m_surace_capabilities.minImageCount, m_surace_capabilities.maxImageCount);
             }
 
-            auto res = m_swapchain.init(vk_utils::context::get().device(), &*m_swapchain_create_info);
+            return m_swapchain.reset(vk_utils::context::get().device(), &*m_swapchain_create_info);
+//            if (res == VK_SUCCESS) {
+//                vkDestroySwapchainKHR(vk_utils::context::get().device(), m_swapchain_create_info->oldSwapchain, nullptr);
+//            }
 
-            if (res == VK_SUCCESS) {
-                vkDestroySwapchainKHR(vk_utils::context::get().device(), m_swapchain_create_info->oldSwapchain, nullptr);
-            }
-
-            return res;
+//            return res;
         }
 
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_utils::context::get().gpu(), vk_utils::context::get().surface(), &m_surace_capabilities);
@@ -723,8 +722,7 @@ float vert_data[][3]{
 };
 
 uint16_t indices[] = {
-    0, 1, 2, 0, 2, 3
-};
+    0, 1, 2, 0, 2, 3};
 
 
 errors::error create_buffer(
@@ -739,6 +737,10 @@ errors::error create_buffer(
     buffer_info.pNext = nullptr;
     buffer_info.size = size;
     buffer_info.usage = buffer_usage;
+    buffer_info.queueFamilyIndexCount = 1;
+    const uint32_t family_index = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
+    buffer_info.pQueueFamilyIndices = &family_index;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo alloc_info{};
     alloc_info.usage = memory_usage;
@@ -761,7 +763,7 @@ errors::error create_buffer(
             VK_WHOLE_SIZE);
     }
 
-    return  errors::OK;
+    return errors::OK;
 }
 
 
@@ -1093,8 +1095,7 @@ int main(int argn, const char** argv)
         static bool is_first = true;
         if (is_first) {
             static VkCommandBuffer handlers[] = {
-                g_data_copy_cmd_buffers[0], g_draw_cmd_buffers[app->get_current_swapchain_img_index()]
-            };
+                g_data_copy_cmd_buffers[0], g_draw_cmd_buffers[app->get_current_swapchain_img_index()]};
             *cmd_bufs = handlers;
             *bufs_count = std::size(handlers);
             is_first = false;

@@ -6,11 +6,11 @@
 #include <cstdio>
 
 #ifndef VMA_IMPLEMENTATION
-#define VMA_IMPLEMENTATION
-#ifndef NDEBUG
-#define VMA_DEBUG_LOG(format, ...) printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT"\n" __VA_OPT__(,) __VA_ARGS__);
-#endif
-#include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
+    #define VMA_IMPLEMENTATION
+    #ifndef NDEBUG
+        #define VMA_DEBUG_LOG(format, ...) printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
+    #endif
+    #include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
 #endif
 
 #include <vector>
@@ -70,22 +70,6 @@ namespace
         }
     }
 
-    void log_instance_data(const char* app_name, const std::vector<VkExtensionProperties>& extensions, const std::vector<VkLayerProperties>& layers)
-    {
-#ifdef NDEBUG
-        return;
-#else
-        LOG_INFO(std::string(app_name) + " available instance extensions:\n\n>>>>>>>>>>\n");
-        for (const auto& ext : extensions) {
-            LOG_INFO(std::string(ext.extensionName) + " v." + std::to_string(ext.specVersion));
-        }
-        LOG_INFO("\n\n" + std::string(app_name) + " available instance layers:\n\n>>>>>>>>>>\n");
-        for (const auto& l : layers) {
-            LOG_INFO(std::string(l.layerName) + " v." + std::to_string(l.specVersion) + "\n" + l.description + "\n");
-        }
-#endif
-    }
-
     bool check_device_extensions(VkPhysicalDevice device, const char** ext_names, uint32_t ext_count)
     {
         uint32_t curr_ext_count;
@@ -138,7 +122,8 @@ namespace
         for (int i = 0; i < queue_families_count; ++i) {
             auto& p = props[i];
 
-            VkBool32 surface_supported;
+            VkBool32 surface_supported{};
+
             vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &surface_supported);
 
             if (surface_supported && queue_families_indices[vk_utils::context::QUEUE_TYPE_PRESENT] < 0) {
@@ -240,9 +225,12 @@ errors::error vk_utils::context::init(
         return err;
     }
 
-    if (const auto err = context_init_info.surface_create_callback(ctx->m_instance, &ctx->m_surface); err != VK_SUCCESS) {
+    VkSurfaceKHR sf{nullptr};
+    if (const auto err = context_init_info.surface_create_callback(ctx->m_instance, &sf); err != VK_SUCCESS) {
         LOG_ERROR("failed to initialize VK context. cannot create surface.");
         return ERROR_FATAL(err, "cannot create surface");
+    } else {
+        ctx->m_surface.reset(ctx->m_instance, sf);
     }
 
     if (const auto err = select_physical_device(context_init_info); err != errors::OK) {
@@ -380,8 +368,6 @@ errors::error vk_utils::context::init_instance(const char* app_name, const vk_ut
     if (auto err_code = ctx->m_instance.init(&instance_info); err_code != VK_SUCCESS) {
         return ERROR_FATAL(err_code, "failed to initialize VK instance.");
     }
-
-//    log_instance_data(app_name, instance_extensions_props, instance_layer_props);
 
     return errors::OK;
 }
@@ -556,7 +542,7 @@ errors::error vk_utils::context::init_device(const context_init_info& context_in
 
 errors::error vk_utils::context::init_memory_allocator()
 {
-    VmaAllocatorCreateInfo allocator_create_info {};
+    VmaAllocatorCreateInfo allocator_create_info{};
     allocator_create_info.device = ctx->device();
     allocator_create_info.instance = ctx->instance();
     allocator_create_info.physicalDevice = ctx->gpu();
@@ -588,7 +574,7 @@ vk_utils::context::~context()
 {
     m_allocator.destroy();
     m_device.destroy();
-    vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+    m_surface.destroy();
     m_debug_messenger.destroy();
     m_instance.destroy();
 }
@@ -646,16 +632,16 @@ VkDebugUtilsMessengerCreateInfoEXT vk_utils::context::get_debug_messenger_create
            VkDebugUtilsMessageTypeFlagsEXT messageTypes,
            const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
            void* pUserData) -> uint32_t {
-          if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-              LOG_ERROR(pCallbackData->pMessage);
-          } else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-              LOG_WARN(pCallbackData->pMessage);
-          } else {
-              LOG_INFO(pCallbackData->pMessage);
-          }
+        if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+            LOG_ERROR(pCallbackData->pMessage);
+        } else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+            LOG_WARN(pCallbackData->pMessage);
+        } else {
+            LOG_INFO(pCallbackData->pMessage);
+        }
 
-          return 0;
-        };
+        return 0;
+    };
 
     VkDebugUtilsMessengerCreateInfoEXT messenger_create_info{};
     messenger_create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
