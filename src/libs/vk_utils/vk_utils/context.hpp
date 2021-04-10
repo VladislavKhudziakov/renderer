@@ -62,7 +62,7 @@ namespace vk_utils
         };
 
         ~context();
-        static errors::error init(const char* app_name, const context_init_info& info);
+        static ERROR_TYPE init(const char* app_name, const context_init_info& info);
         static const context& get();
 
         VkDevice device() const;
@@ -77,12 +77,12 @@ namespace vk_utils
 
     private:
         static VkDebugUtilsMessengerCreateInfoEXT get_debug_messenger_create_info();
-        static errors::error init_instance(const char* app_name, const context_init_info& info);
-        static errors::error init_debug_messenger(const context_init_info& info);
-        static errors::error select_physical_device(const context_init_info& info);
-        static errors::error init_device(const context_init_info& info);
-        static errors::error request_queues();
-        static errors::error init_memory_allocator();
+        static ERROR_TYPE init_instance(const char* app_name, const context_init_info& info);
+        static ERROR_TYPE init_debug_messenger(const context_init_info& info);
+        static ERROR_TYPE select_physical_device(const context_init_info& info);
+        static ERROR_TYPE init_device(const context_init_info& info);
+        static ERROR_TYPE request_queues();
+        static ERROR_TYPE init_memory_allocator();
 
         instance_handler m_instance{};
         surface_handler m_surface{};

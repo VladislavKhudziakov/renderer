@@ -6,8 +6,9 @@
 
 int32_t app::base_app::run(int32_t argn, const char** argv)
 {
-    errors::handle_error(init_window());
-    errors::handle_error(run_main_loop());
-    errors::handle_error(cleanup());
+    HANDLE_ERROR(init_window());
+    HANDLE_ERROR(run_main_loop());
+    HANDLE_ERROR(cleanup());
+
     return 0;
 }

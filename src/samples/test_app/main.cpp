@@ -118,7 +118,7 @@ public:
     }
 
 protected:
-    errors::error init_window() override
+    ERROR_TYPE init_window() override
     {
         glfwInit();
 
@@ -131,21 +131,21 @@ protected:
         glfwSetWindowSizeCallback(m_window, on_window_resized);
 
         if (m_window == nullptr) {
-            return ERROR(-1, "failed to create window");
+            RAISE_ERROR_FATAL(-1, "Failed to create window.");
         }
 
         if (const auto err_code = init_vulkan(); err_code != 0) {
-            return ERROR(-1, "failed to init vulkan");
+            RAISE_ERROR_FATAL(-1, "Failed to init vulkan.");
         }
 
-        return errors::OK;
+        RAISE_ERROR_OK();
     }
 
-    errors::error run_main_loop() override
+    ERROR_TYPE run_main_loop() override
     {
         if (m_create_callback) {
             if (auto err_code = m_create_callback(this); err_code != VK_SUCCESS) {
-                return ERROR(err_code, "create cb failed");
+                RAISE_ERROR_FATAL(err_code, "create cb failed");
             }
         }
 
@@ -217,7 +217,7 @@ protected:
                     LOG_WARN("vkAcquireNextImageKHR failed.");
                     recreate_swapchain();
                 } else if (res == VK_ERROR_DEVICE_LOST) {
-                    return ERROR_FATAL(VK_ERROR_DEVICE_LOST, "device lost occured in vkAcquireNextImageKHR");
+                    RAISE_ERROR_FATAL(VK_ERROR_DEVICE_LOST, "device lost occured in vkAcquireNextImageKHR");
                 }
             }
 
@@ -253,7 +253,7 @@ protected:
             if (cmd_buffers != nullptr && cmd_buffers_count > 0) {
                 res = vkQueueSubmit(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), 1, &submit_info, render_finished_fences[curr_frame]);
                 if (res != VK_SUCCESS) {
-                    return ERROR_FATAL(res, "error occured in vkQueuePresentKHR");
+                    RAISE_ERROR_FATAL(res, "error occured in vkQueuePresentKHR");
                 }
             }
 
@@ -278,7 +278,7 @@ protected:
                     recreate_swapchain();
                     //ok
                 } else if (present_res == VK_ERROR_DEVICE_LOST) {
-                    return ERROR_FATAL(VK_ERROR_DEVICE_LOST, "device lost occured in vkQueuePresentKHR");
+                    RAISE_ERROR_FATAL(VK_ERROR_DEVICE_LOST, "device lost occured in vkQueuePresentKHR");
                 }
             }
 
@@ -288,14 +288,14 @@ protected:
 
         vkDeviceWaitIdle(vk_utils::context::get().device());
 
-        return errors::OK;
+        RAISE_ERROR_OK();
     }
 
-    errors::error cleanup() override
+    ERROR_TYPE cleanup() override
     {
         if (m_destroy_callback) {
             if (auto err_code = m_destroy_callback(this); err_code != VK_SUCCESS) {
-                return ERROR(err_code, "destroy failed.");
+                RAISE_ERROR_FATAL(err_code, "destroy failed.");
             }
         }
 
@@ -306,7 +306,7 @@ protected:
 
         glfwDestroyWindow(m_window);
         glfwTerminate();
-        return errors::OK;
+        RAISE_ERROR_OK();
     }
 
 private:
@@ -339,7 +339,7 @@ private:
             return res;
         };
 
-        errors::handle_error(vk_utils::context::init("hello triangle", context_info));
+        HANDLE_ERROR(vk_utils::context::init("hello triangle", context_info));
 
         if (const auto err_code = create_swapchain();
             err_code != VK_SUCCESS) {
@@ -374,11 +374,6 @@ private:
             }
 
             return m_swapchain.reset(vk_utils::context::get().device(), &*m_swapchain_create_info);
-            //            if (res == VK_SUCCESS) {
-            //                vkDestroySwapchainKHR(vk_utils::context::get().device(), m_swapchain_create_info->oldSwapchain, nullptr);
-            //            }
-
-            //            return res;
         }
 
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_utils::context::get().gpu(), vk_utils::context::get().surface(), &m_surace_capabilities);
@@ -761,7 +756,7 @@ struct global_ubo
 };
 
 
-errors::error create_buffer(
+ERROR_TYPE create_buffer(
     vk_utils::vma_buffer_handler& buffer,
     VkBufferUsageFlags buffer_usage,
     VmaMemoryUsage memory_usage,
@@ -784,7 +779,7 @@ errors::error create_buffer(
 
 
     if (const auto err = buffer.init(vk_utils::context::get().allocator(), &buffer_info, &alloc_info); err != VK_SUCCESS) {
-        return ERROR(err, "cannot create buffer.");
+        RAISE_ERROR_WARN(err, "cannot init buffer.");
     }
 
     if (data != nullptr) {
@@ -799,11 +794,11 @@ errors::error create_buffer(
             VK_WHOLE_SIZE);
     }
 
-    return errors::OK;
+    RAISE_ERROR_OK();
 }
 
 
-errors::error load_image2D(const char* path, vk_utils::vma_image_handler& image, vk_utils::image_view_handler& img_view, vk_utils::sampler_handler& sampler)
+ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk_utils::image_view_handler& img_view, vk_utils::sampler_handler& sampler)
 {
     int w, h, c;
     std::unique_ptr<stbi_uc, std::function<void(stbi_uc*)>> image_handler{
@@ -811,7 +806,7 @@ errors::error load_image2D(const char* path, vk_utils::vma_image_handler& image,
         [](stbi_uc* ptr) {if (ptr != nullptr) stbi_image_free(ptr); }};
 
     if (image_handler == nullptr) {
-        return ERROR(-1, "Cannot load image.");
+        RAISE_ERROR_WARN(-1, "Cannot load image.");
     }
 
     uint32_t draw_queue_family = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
@@ -874,7 +869,7 @@ errors::error load_image2D(const char* path, vk_utils::vma_image_handler& image,
     image_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
     if (const auto e = image.init(vk_utils::context::get().allocator(), &image_info, &image_alloc_info); e != VK_SUCCESS) {
-        return ERROR(e, "Cannot init image.");
+        RAISE_ERROR_WARN(e, "Cannot init image.");
     }
 
     VkImageViewCreateInfo img_view_info{};
@@ -891,7 +886,7 @@ errors::error load_image2D(const char* path, vk_utils::vma_image_handler& image,
     img_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 
     if (const auto e = img_view.init(vk_utils::context::get().device(), &img_view_info); e != VK_SUCCESS) {
-        return ERROR(e, "Cannot init image view.");
+        RAISE_ERROR_WARN(e, "Cannot init image view.");
     }
 
     VkSamplerCreateInfo sampler_info{};
@@ -911,7 +906,7 @@ errors::error load_image2D(const char* path, vk_utils::vma_image_handler& image,
     sampler_info.compareEnable = VK_FALSE;
 
     if (const auto e = sampler.init(vk_utils::context::get().device(), &sampler_info); e != VK_SUCCESS) {
-        return ERROR(e, "Cannot init sampler.");
+        RAISE_ERROR_WARN(e, "Cannot init sampler.");
     }
 
     VkCommandBufferAllocateInfo buffer_alloc_info{};
@@ -996,7 +991,7 @@ errors::error load_image2D(const char* path, vk_utils::vma_image_handler& image,
     vkQueueSubmit(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), 1, &submit_info, nullptr);
 
     vkQueueWaitIdle(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS));
-    return errors::OK;
+    RAISE_ERROR_OK();
 }
 
 
@@ -1032,21 +1027,10 @@ int32_t init_pipeline(const hello_triangle_app* app)
     static bool vert_buffer_initialized = false;
 
     if (!vert_buffer_initialized) {
-        if (create_buffer(g_vertex_buffer, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, sizeof(vert_data)) != errors::OK) {
-            return -1;
-        }
-
-        if (create_buffer(g_vertex_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(vert_data), vert_data) != errors::OK) {
-            return -1;
-        }
-
-        if (create_buffer(g_index_buffer, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, sizeof(indices)) != errors::OK) {
-            return -1;
-        }
-
-        if (create_buffer(g_index_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(indices), indices) != errors::OK) {
-            return -1;
-        }
+        PASS_ERROR(create_buffer(g_vertex_buffer, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, sizeof(vert_data)));
+        PASS_ERROR(create_buffer(g_vertex_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(vert_data), vert_data));
+        PASS_ERROR(create_buffer(g_index_buffer, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, sizeof(indices)));
+        PASS_ERROR(create_buffer(g_index_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(indices), indices));
 
         vert_buffer_initialized = true;
     }
@@ -1263,7 +1247,7 @@ int32_t init_pipeline(const hello_triangle_app* app)
     static bool image_loaded = false;
 
     if (!image_loaded) {
-        errors::handle_error(load_image2D("./images/texture.jpg", g_shader_image, g_shader_img_view, g_shader_sampler));
+        PASS_ERROR(load_image2D("./images/texture.jpg", g_shader_image, g_shader_img_view, g_shader_sampler));
         image_loaded = true;
     }
 

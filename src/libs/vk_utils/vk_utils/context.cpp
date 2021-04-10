@@ -246,56 +246,30 @@ VkInstance vk_utils::context::instance() const
 }
 
 
-errors::error vk_utils::context::init(
+ERROR_TYPE vk_utils::context::init(
     const char* app_name,
     const context_init_info& context_init_info)
 {
     ctx.emplace();
     ctx->m_app_name = app_name;
 
-    if (const auto err = init_instance(app_name, context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to initialize VK context. ", err.message);
-        return err;
-    }
-
-    if (const auto err = init_debug_messenger(context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to initialize VK context. ", err.message);
-        return err;
-    }
-
+    PASS_ERROR(init_instance(app_name, context_init_info));
+    PASS_ERROR(init_debug_messenger(context_init_info));
     VkSurfaceKHR sf{nullptr};
-    if (const auto err = context_init_info.surface_create_callback(ctx->m_instance, &sf); err != VK_SUCCESS) {
-        LOG_ERROR("failed to initialize VK context. cannot create surface.");
-        return ERROR_FATAL(err, "cannot create surface");
-    } else {
-        ctx->m_surface.reset(ctx->m_instance, sf);
+    if (const auto err_code = context_init_info.surface_create_callback(ctx->m_instance, &sf); err_code != VK_SUCCESS) {
+        RAISE_ERROR_FATAL(err_code, "Cannot init surface.");
     }
+    ctx->m_surface.reset(ctx->m_instance, sf);
+    PASS_ERROR(select_physical_device(context_init_info));
+    PASS_ERROR(init_device(context_init_info));
+    PASS_ERROR(init_memory_allocator());
+    PASS_ERROR(request_queues());
 
-    if (const auto err = select_physical_device(context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to initialize VK context. ", err.message);
-        return err;
-    }
-
-    if (const auto err = init_device(context_init_info); err != errors::OK) {
-        LOG_ERROR("failed to init VK device. ", err.message);
-        return err;
-    }
-
-    if (const auto err = init_memory_allocator(); err != errors::OK) {
-        LOG_ERROR("failed to init VK mem allocator. ", err.message);
-        return err;
-    }
-
-    if (const auto err = request_queues(); err != errors::OK) {
-        LOG_ERROR("failed to request device queue. ", err.message);
-        return err;
-    }
-
-    return errors::OK;
+    RAISE_ERROR_OK();
 }
 
 
-errors::error vk_utils::context::init_instance(const char* app_name, const vk_utils::context::context_init_info& context_init_info)
+ERROR_TYPE vk_utils::context::init_instance(const char* app_name, const vk_utils::context::context_init_info& context_init_info)
 {
     uint32_t api_version;
     vkEnumerateInstanceVersion(&api_version);
@@ -332,7 +306,7 @@ errors::error vk_utils::context::init_instance(const char* app_name, const vk_ut
         });
 
         if (required_ext_found == instance_extensions_props.end()) {
-            return ERROR(-1, std::string("cannot find required instance extension ") + context_init_info.required_instance_extensions.names[i]);
+            RAISE_ERROR_FATAL(-1, std::string("cannot find required instance extension ") + context_init_info.required_instance_extensions.names[i]);
         }
     }
 
@@ -371,7 +345,7 @@ errors::error vk_utils::context::init_instance(const char* app_name, const vk_ut
         });
 
         if (required_layer_found == instance_layer_props.end()) {
-            return ERROR(-1, std::string("cannot find required instance layer ") + context_init_info.required_instance_layers.names[i]);
+            RAISE_ERROR_FATAL(-1, std::string("cannot find required instance layer ") + context_init_info.required_instance_layers.names[i]);
         }
     }
 
@@ -404,14 +378,13 @@ errors::error vk_utils::context::init_instance(const char* app_name, const vk_ut
     instance_info.enabledExtensionCount = instance_extensions_list.size();
 
     if (auto err_code = ctx->m_instance.init(&instance_info); err_code != VK_SUCCESS) {
-        return ERROR_FATAL(err_code, "failed to initialize VK instance.");
+        RAISE_ERROR_FATAL(err_code, "failed to initialize VK instance.");
     }
-
-    return errors::OK;
+    RAISE_ERROR_OK();
 }
 
 
-errors::error vk_utils::context::init_debug_messenger(const vk_utils::context::context_init_info& info)
+ERROR_TYPE vk_utils::context::init_debug_messenger(const vk_utils::context::context_init_info& info)
 {
 #ifdef NDEBUG
     return errors::OK;
@@ -419,15 +392,14 @@ errors::error vk_utils::context::init_debug_messenger(const vk_utils::context::c
     auto messenger_create_info = get_debug_messenger_create_info();
 
     if (auto err_code = ctx->m_debug_messenger.init(context::get().instance(), &messenger_create_info); err_code != VK_SUCCESS) {
-        return ERROR_FATAL(err_code, "cannot init debug messenger.");
+        RAISE_ERROR_FATAL(err_code, "cannot init debug messenger.");
     }
-
-    return errors::OK;
+    RAISE_ERROR_OK();
 #endif
 }
 
 
-errors::error vk_utils::context::select_physical_device(const vk_utils::context::context_init_info& info)
+ERROR_TYPE vk_utils::context::select_physical_device(const vk_utils::context::context_init_info& info)
 {
     uint32_t phys_devices_count;
     vkEnumeratePhysicalDevices(ctx->m_instance, &phys_devices_count, nullptr);
@@ -459,27 +431,27 @@ errors::error vk_utils::context::select_physical_device(const vk_utils::context:
     if (info.device_name != nullptr) {
         memset(ctx->m_queue_families_indices, char(-1), sizeof(m_queue_families_indices));
         if (try_select_device([](const VkPhysicalDeviceProperties&) { return true; })) {
-            return errors::OK;
+            RAISE_ERROR_OK();
         }
     }
 
     memset(ctx->m_queue_families_indices, char(-1), sizeof(m_queue_families_indices));
 
     if (try_select_device([](const VkPhysicalDeviceProperties& props) { return props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU; })) {
-        return errors::OK;
+        RAISE_ERROR_OK();
     }
 
     memset(ctx->m_queue_families_indices, char(-1), sizeof(m_queue_families_indices));
 
     if (try_select_device([](const VkPhysicalDeviceProperties& props) { return true; })) {
-        return errors::OK;
+        RAISE_ERROR_OK();
     }
 
-    return ERROR_FATAL(-1, "Cannot find suitable device.");
+    RAISE_ERROR_FATAL(-1, "Cannot find suitable device.");
 }
 
 
-errors::error vk_utils::context::init_device(const context_init_info& context_init_info)
+ERROR_TYPE vk_utils::context::init_device(const context_init_info& context_init_info)
 {
     uint32_t ext_props_size{0};
     vkEnumerateDeviceExtensionProperties(context::get().gpu(), nullptr, &ext_props_size, nullptr);
@@ -571,14 +543,13 @@ errors::error vk_utils::context::init_device(const context_init_info& context_in
     device_info.queueCreateInfoCount = queue_infos_size;
 
     if (auto err = ctx->m_device.init(context::get().gpu(), &device_info); err != VK_SUCCESS) {
-        return ERROR_FATAL(err, "cannot initialize logical device");
+        RAISE_ERROR_FATAL(err, "cannot initialize logical device");
     }
-
-    return errors::OK;
+    RAISE_ERROR_OK();
 }
 
 
-errors::error vk_utils::context::init_memory_allocator()
+ERROR_TYPE vk_utils::context::init_memory_allocator()
 {
     VmaAllocatorCreateInfo allocator_create_info{};
     allocator_create_info.device = ctx->device();
@@ -587,14 +558,13 @@ errors::error vk_utils::context::init_memory_allocator()
     allocator_create_info.vulkanApiVersion = VK_API_VERSION_1_0;
 
     if (auto err = ctx->m_allocator.init(&allocator_create_info); err != VK_SUCCESS) {
-        return ERROR_FATAL(err, "cannot initialize allocator.");
+        RAISE_ERROR_FATAL(err, "cannot initialize allocator.");
     }
-
-    return errors::OK;
+    RAISE_ERROR_OK();
 }
 
 
-errors::error vk_utils::context::request_queues()
+ERROR_TYPE vk_utils::context::request_queues()
 {
     uint32_t graphics_queue_index{0};
 
@@ -608,7 +578,7 @@ errors::error vk_utils::context::request_queues()
         }
     }
 
-    return errors::OK;
+    RAISE_ERROR_OK();
 }
 
 
