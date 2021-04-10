@@ -10,6 +10,11 @@ namespace vk_utils
     class context
     {
     public:
+        struct queue_family_data {
+            int32_t index;
+            uint32_t max_queue_count;
+        };
+
         struct extensions_info
         {
             const char** names;
@@ -33,6 +38,7 @@ namespace vk_utils
             QUEUE_TYPE_GRAPHICS,
             QUEUE_TYPE_COMPUTE,
             QUEUE_TYPE_PRESENT,
+            QUEUE_TYPE_TRANSFER,
             QUEUE_TYPE_SIZE
         };
 
@@ -87,7 +93,7 @@ namespace vk_utils
         device_handler m_device{};
         vma_allocator_handler m_allocator{};
 
-        int32_t m_queue_families_indices[QUEUE_TYPE_SIZE]{};
+        queue_family_data m_queue_families_indices[QUEUE_TYPE_SIZE]{};
         VkQueue m_queues[QUEUE_TYPE_SIZE]{};
 
         const char* m_app_name;

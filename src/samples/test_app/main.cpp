@@ -20,6 +20,9 @@
 #include <string>
 #include <vector>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb/stb_image.h>
+
 const char* shaders_paths_spv[]{
     "./shaders/triangle/triangle.vert.glsl.spv",
     "./shaders/triangle/triangle.frag.glsl.spv",
@@ -45,11 +48,18 @@ vk_utils::vma_buffer_handler g_index_staging_buffer;
 std::vector<vk_utils::vma_buffer_handler> g_global_uniform_buffer;
 
 vk_utils::descriptor_set_layout_handler g_ubo_descriptor_set_layout;
+vk_utils::descriptor_set_layout_handler g_texture_descriptor_set_layout;
+
 
 vk_utils::descriptor_pool_handler g_descriptor_pool;
-vk_utils::descriptor_set_handler g_descriptor_sets;
+vk_utils::descriptor_set_handler g_ubo_descriptor_sets;
+vk_utils::descriptor_set_handler g_texture_descriptor_sets;
 
 vk_utils::shader_module_handler g_shader_modules[std::size(shaders_paths_spv)];
+
+vk_utils::vma_image_handler g_shader_image;
+vk_utils::image_view_handler g_shader_img_view;
+vk_utils::sampler_handler g_shader_sampler;
 
 const char* validation_layers[]{"VK_LAYER_KHRONOS_validation"};
 
@@ -466,8 +476,8 @@ private:
         pass_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         pass_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         pass_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        pass_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         pass_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        pass_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         pass_attachment.format = m_swapchain_create_info->imageFormat;
 
         VkAttachmentReference ref{};
@@ -723,12 +733,19 @@ int32_t load_shader(const std::string& path, VkDevice device, vk_utils::shader_m
 float vert_data[][3]{
     {-0.5, -0.5, 0.0},
     {1., 1., 1.},
+    {0.0, 0.0, 0.0},
+
     {-0.5, 0.5, 0.0},
     {0., 1., 0.},
+    {0.0, 1.0, 0.0},
+
     {0.5, 0.5, 0.0},
     {0., 0., 1.},
+    {1.0, 1.0, 0.0},
+
     {0.5, -0.5, 0.0},
     {1., 0., 1.},
+    {1.0, 0.0, 0.0},
 };
 
 uint16_t indices[] = {
@@ -782,6 +799,203 @@ errors::error create_buffer(
             VK_WHOLE_SIZE);
     }
 
+    return errors::OK;
+}
+
+
+errors::error load_image2D(const char* path, vk_utils::vma_image_handler& image, vk_utils::image_view_handler& img_view, vk_utils::sampler_handler& sampler)
+{
+    int w, h, c;
+    std::unique_ptr<stbi_uc, std::function<void(stbi_uc*)>> image_handler{
+        stbi_load(path, &w, &h, &c, 0),
+        [](stbi_uc* ptr) {if (ptr != nullptr) stbi_image_free(ptr); }};
+
+    if (image_handler == nullptr) {
+        return ERROR(-1, "Cannot load image.");
+    }
+
+    uint32_t draw_queue_family = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
+
+    vk_utils::vma_buffer_handler staging_buffer{};
+    create_buffer(staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, w * h * c, image_handler.get());
+
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.pNext = nullptr;
+    image_info.flags = 0;
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.arrayLayers = 1;
+    image_info.mipLevels = 1;
+    image_info.extent = {
+        .width = static_cast<uint32_t>(w),
+        .height = static_cast<uint32_t>(h),
+        .depth = 1};
+
+    VkComponentMapping components;
+
+    switch (c) {
+        case STBI_grey:
+            image_info.format = VK_FORMAT_R8_SRGB;
+            components.r = VK_COMPONENT_SWIZZLE_R;
+            components.g = VK_COMPONENT_SWIZZLE_R;
+            components.b = VK_COMPONENT_SWIZZLE_R;
+            components.a = VK_COMPONENT_SWIZZLE_A;
+            break;
+        case STBI_grey_alpha:
+            image_info.format = VK_FORMAT_R8G8_SRGB;
+            components.r = VK_COMPONENT_SWIZZLE_R;
+            components.g = VK_COMPONENT_SWIZZLE_B;
+            components.b = VK_COMPONENT_SWIZZLE_B;
+            components.a = VK_COMPONENT_SWIZZLE_G;
+            break;
+        case STBI_rgb:
+            image_info.format = VK_FORMAT_R8G8B8_SRGB;
+            components.r = VK_COMPONENT_SWIZZLE_R;
+            components.g = VK_COMPONENT_SWIZZLE_G;
+            components.b = VK_COMPONENT_SWIZZLE_B;
+            components.a = VK_COMPONENT_SWIZZLE_A;
+            break;
+        case STBI_rgb_alpha:
+            image_info.format = VK_FORMAT_R8G8B8A8_SRGB;
+            components.r = VK_COMPONENT_SWIZZLE_R;
+            components.g = VK_COMPONENT_SWIZZLE_G;
+            components.b = VK_COMPONENT_SWIZZLE_B;
+            components.a = VK_COMPONENT_SWIZZLE_A;
+            break;
+    }
+
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    VmaAllocationCreateInfo image_alloc_info{};
+    image_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+    if (const auto e = image.init(vk_utils::context::get().allocator(), &image_info, &image_alloc_info); e != VK_SUCCESS) {
+        return ERROR(e, "Cannot init image.");
+    }
+
+    VkImageViewCreateInfo img_view_info{};
+    img_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    img_view_info.pNext = nullptr;
+    img_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    img_view_info.format = image_info.format;
+    img_view_info.components = components;
+    img_view_info.image = image;
+    img_view_info.subresourceRange.baseArrayLayer = 0;
+    img_view_info.subresourceRange.layerCount = 1;
+    img_view_info.subresourceRange.baseMipLevel = 0;
+    img_view_info.subresourceRange.levelCount = 1;
+    img_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    if (const auto e = img_view.init(vk_utils::context::get().device(), &img_view_info); e != VK_SUCCESS) {
+        return ERROR(e, "Cannot init image view.");
+    }
+
+    VkSamplerCreateInfo sampler_info{};
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.pNext = nullptr;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.minFilter = VK_FILTER_LINEAR;
+    sampler_info.magFilter = VK_FILTER_LINEAR;
+    sampler_info.anisotropyEnable = VK_FALSE;
+    sampler_info.maxAnisotropy = 0;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler_info.minLod = 0;
+    sampler_info.maxLod = 0;
+    sampler_info.mipLodBias = 0;
+    sampler_info.compareEnable = VK_FALSE;
+
+    if (const auto e = sampler.init(vk_utils::context::get().device(), &sampler_info); e != VK_SUCCESS) {
+        return ERROR(e, "Cannot init sampler.");
+    }
+
+    VkCommandBufferAllocateInfo buffer_alloc_info{};
+    buffer_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    buffer_alloc_info.pNext = nullptr;
+    buffer_alloc_info.commandBufferCount = 1;
+    buffer_alloc_info.commandPool = g_cmd_pool;
+    buffer_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+
+    vk_utils::cmd_buffers_handler cmd_buffer{};
+    cmd_buffer.init(vk_utils::context::get().device(), g_cmd_pool, &buffer_alloc_info, 1);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.pNext = nullptr;
+    begin_info.pInheritanceInfo = nullptr;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(cmd_buffer[0], &begin_info);
+
+    VkImageMemoryBarrier img_transfer_barrier{};
+    img_transfer_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    img_transfer_barrier.pNext = nullptr;
+    img_transfer_barrier.image = image;
+    img_transfer_barrier.srcAccessMask = 0;
+    img_transfer_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    img_transfer_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    img_transfer_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    img_transfer_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    img_transfer_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+    img_transfer_barrier.subresourceRange.layerCount = 1;
+    img_transfer_barrier.subresourceRange.baseArrayLayer = 0;
+    img_transfer_barrier.subresourceRange.layerCount = 1;
+    img_transfer_barrier.subresourceRange.baseMipLevel = 0;
+    img_transfer_barrier.subresourceRange.levelCount = 1;
+    img_transfer_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    vkCmdPipelineBarrier(cmd_buffer[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &img_transfer_barrier);
+
+    VkBufferImageCopy img_copy{};
+    img_copy.imageExtent = image_info.extent;
+    img_copy.imageOffset = {0, 0, 0};
+    img_copy.bufferRowLength = 0;
+    img_copy.bufferImageHeight = 0;
+    img_copy.bufferOffset = 0;
+    img_copy.imageSubresource.mipLevel = 0;
+    img_copy.imageSubresource.baseArrayLayer = 0;
+    img_copy.imageSubresource.layerCount = 1;
+    img_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    vkCmdCopyBufferToImage(cmd_buffer[0], staging_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &img_copy);
+
+    VkImageMemoryBarrier img_barrier{};
+    img_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    img_barrier.pNext = nullptr;
+    img_barrier.image = image;
+    img_barrier.srcAccessMask = 0;
+    img_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    img_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    img_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    img_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    img_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    img_barrier.subresourceRange.layerCount = 1;
+    img_barrier.subresourceRange.baseArrayLayer = 0;
+    img_barrier.subresourceRange.layerCount = 1;
+    img_barrier.subresourceRange.baseMipLevel = 0;
+    img_barrier.subresourceRange.levelCount = 1;
+    img_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    vkCmdPipelineBarrier(cmd_buffer[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &img_barrier);
+
+    vkEndCommandBuffer(cmd_buffer[0]);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = nullptr;
+    submit_info.pCommandBuffers = cmd_buffer;
+    submit_info.commandBufferCount = 1;
+
+    vkQueueSubmit(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), 1, &submit_info, nullptr);
+
+    vkQueueWaitIdle(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS));
     return errors::OK;
 }
 
@@ -845,12 +1059,16 @@ int32_t init_pipeline(const hello_triangle_app* app)
         {.location = 1,
          .binding = 0,
          .format = VK_FORMAT_R32G32B32_SFLOAT,
-         .offset = sizeof(float[3])}};
+         .offset = sizeof(float[3])},
+        {.location = 2,
+         .binding = 0,
+         .format = VK_FORMAT_R32G32B32_SFLOAT,
+         .offset = sizeof(float[3]) * 2}};
 
     VkVertexInputBindingDescription vert_bind[] = {
         {
             .binding = 0,
-            .stride = sizeof(float[3]) * 2,
+            .stride = sizeof(float[3]) * 3,
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
         }};
 
@@ -944,35 +1162,50 @@ int32_t init_pipeline(const hello_triangle_app* app)
     dyn_state_info.pDynamicStates = dyn_state;
     dyn_state_info.dynamicStateCount = std::size(dyn_state);
 
-    VkDescriptorSetLayoutBinding descriptor_set_layout_binding[] = {
-        {
-            .binding = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-            .pImmutableSamplers = nullptr,
-        }};
+    static bool pipeline_layout_created = false;
 
-    static bool pipeline_layput_created = false;
+    if (!pipeline_layout_created) {
+        VkDescriptorSetLayoutBinding descriptor_set_layout_binding[] = {
+            {
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = nullptr,
+            },
+            {
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = nullptr,
+            }};
 
-    if (!pipeline_layput_created) {
         VkDescriptorSetLayoutCreateInfo descriptor_set_layout_info{};
         descriptor_set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         descriptor_set_layout_info.pNext = nullptr;
-        descriptor_set_layout_info.pBindings = descriptor_set_layout_binding;
-        descriptor_set_layout_info.bindingCount = std::size(descriptor_set_layout_binding);
+        descriptor_set_layout_info.pBindings = &descriptor_set_layout_binding[0];
+        descriptor_set_layout_info.bindingCount = 1;
 
         if (auto err_code = g_ubo_descriptor_set_layout.init(vk_utils::context::get().device(), &descriptor_set_layout_info); err_code != VK_SUCCESS) {
             return -1;
         }
+
+        descriptor_set_layout_info.pBindings = &descriptor_set_layout_binding[1];
+
+        if (auto err_code = g_texture_descriptor_set_layout.init(vk_utils::context::get().device(), &descriptor_set_layout_info); err_code != VK_SUCCESS) {
+            return -1;
+        }
+
+        VkDescriptorSetLayout desc_set_layouts[]{g_ubo_descriptor_set_layout, g_texture_descriptor_set_layout};
 
         VkPipelineLayoutCreateInfo layout_create_info{};
         layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layout_create_info.pNext = nullptr;
         layout_create_info.pPushConstantRanges = nullptr;
         layout_create_info.pushConstantRangeCount = 0;
-        layout_create_info.pSetLayouts = g_ubo_descriptor_set_layout;
-        layout_create_info.setLayoutCount = 1;
+        layout_create_info.pSetLayouts = desc_set_layouts;
+        layout_create_info.setLayoutCount = std::size(desc_set_layouts);
 
         if (auto err_code =
                 g_pipeline_layout.init(vk_utils::context::get().device(), &layout_create_info);
@@ -980,7 +1213,7 @@ int32_t init_pipeline(const hello_triangle_app* app)
             return -1;
         }
 
-        pipeline_layput_created = true;
+        pipeline_layout_created = true;
     }
 
     VkGraphicsPipelineCreateInfo pipeline_create_info{};
@@ -1025,6 +1258,13 @@ int32_t init_pipeline(const hello_triangle_app* app)
         }
 
         cmd_pool_created = true;
+    }
+
+    static bool image_loaded = false;
+
+    if (!image_loaded) {
+        errors::handle_error(load_image2D("./images/texture.jpg", g_shader_image, g_shader_img_view, g_shader_sampler));
+        image_loaded = true;
     }
 
     VkCommandBufferAllocateInfo cmd_buff_alloc_info{};
@@ -1090,46 +1330,72 @@ int32_t init_pipeline(const hello_triangle_app* app)
 
         VkDescriptorPoolSize pools_size[] = {
             {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+             .descriptorCount = static_cast<uint32_t>(fbs.size())},
+            {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
              .descriptorCount = static_cast<uint32_t>(fbs.size())}};
 
         descriptor_pool_info.pPoolSizes = pools_size;
         descriptor_pool_info.poolSizeCount = std::size(pools_size);
-        descriptor_pool_info.maxSets = fbs.size();
+        descriptor_pool_info.maxSets = fbs.size() * 2;
 
         if (const auto err_code = g_descriptor_pool.init(vk_utils::context::get().device(), &descriptor_pool_info); err_code != VK_SUCCESS) {
             return -1;
         }
 
-        std::vector<VkDescriptorSetLayout> desc_layouts{fbs.size(), g_ubo_descriptor_set_layout};
+        std::vector<VkDescriptorSetLayout> ubo_desc_layouts{fbs.size(), g_ubo_descriptor_set_layout};
+        std::vector<VkDescriptorSetLayout> texture_desc_layouts{fbs.size(), g_texture_descriptor_set_layout};
+
         VkDescriptorSetAllocateInfo descriptor_alloc_info{};
         descriptor_alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         descriptor_alloc_info.pNext = nullptr;
-        descriptor_alloc_info.pSetLayouts = desc_layouts.data();
+        descriptor_alloc_info.pSetLayouts = ubo_desc_layouts.data();
         descriptor_alloc_info.descriptorSetCount = fbs.size();
         descriptor_alloc_info.descriptorPool = g_descriptor_pool;
 
-        if (const auto err_code = g_descriptor_sets.init(vk_utils::context::get().device(), g_descriptor_pool, &descriptor_alloc_info, descriptor_alloc_info.descriptorSetCount); err_code != VK_SUCCESS) {
+        if (const auto err_code = g_ubo_descriptor_sets.init(vk_utils::context::get().device(), g_descriptor_pool, &descriptor_alloc_info, descriptor_alloc_info.descriptorSetCount); err_code != VK_SUCCESS) {
             return -1;
         }
 
-        VkWriteDescriptorSet write_desc_set{};
-        write_desc_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write_desc_set.pNext = nullptr;
-        write_desc_set.dstBinding = 0;
-        write_desc_set.descriptorCount = 1;
-        write_desc_set.dstArrayElement = 0;
-        write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptor_alloc_info.pSetLayouts = texture_desc_layouts.data();
+
+        if (const auto err_code = g_texture_descriptor_sets.init(vk_utils::context::get().device(), g_descriptor_pool, &descriptor_alloc_info, descriptor_alloc_info.descriptorSetCount); err_code != VK_SUCCESS) {
+            return -1;
+        }
+
+        VkWriteDescriptorSet ubo_write_desc_set{};
+        ubo_write_desc_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        ubo_write_desc_set.pNext = nullptr;
+        ubo_write_desc_set.dstBinding = 0;
+        ubo_write_desc_set.descriptorCount = 1;
+        ubo_write_desc_set.dstArrayElement = 0;
+        ubo_write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+
+        VkWriteDescriptorSet tex_write_desc_set{};
+        tex_write_desc_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        tex_write_desc_set.pNext = nullptr;
+        tex_write_desc_set.dstBinding = 0;
+        tex_write_desc_set.descriptorCount = 1;
+        tex_write_desc_set.dstArrayElement = 0;
+        tex_write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        VkDescriptorImageInfo tex_write_desc_set_img_info{};
+        tex_write_desc_set_img_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        tex_write_desc_set_img_info.imageView = g_shader_img_view;
+        tex_write_desc_set_img_info.sampler = g_shader_sampler;
+
+        tex_write_desc_set.pImageInfo = &tex_write_desc_set_img_info;
 
         for (int i = 0; i < fbs.size(); ++i) {
-            write_desc_set.dstSet = g_descriptor_sets[i];
+            ubo_write_desc_set.dstSet = g_ubo_descriptor_sets[i];
+            tex_write_desc_set.dstSet = g_texture_descriptor_sets[i];
             VkDescriptorBufferInfo buffer_info{};
 
             buffer_info.buffer = g_global_uniform_buffer[i];
             buffer_info.offset = 0;
             buffer_info.range = VK_WHOLE_SIZE;
-            write_desc_set.pBufferInfo = &buffer_info;
+            ubo_write_desc_set.pBufferInfo = &buffer_info;
 
-            vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &write_desc_set, 0, nullptr);
+            vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &ubo_write_desc_set, 0, nullptr);
+            vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &tex_write_desc_set, 0, nullptr);
         }
 
         descriptors_sets_created = true;
@@ -1168,9 +1434,9 @@ int32_t init_pipeline(const hello_triangle_app* app)
 
         vkCmdBindPipeline(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline);
         VkBuffer v_buffer[] = {g_vertex_buffer};
-        VkDescriptorSet desc_sets[] = {g_descriptor_sets[i]};
+        VkDescriptorSet desc_sets[] = {g_ubo_descriptor_sets[i], g_texture_descriptor_sets[i]};
         VkDeviceSize offsets[] = {0};
-        vkCmdBindDescriptorSets(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline_layout, 0, 1, desc_sets, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline_layout, 0, std::size(desc_sets), desc_sets, 0, nullptr);
         vkCmdBindVertexBuffers(cmd_buffers[i], 0, 1, v_buffer, offsets);
         vkCmdBindIndexBuffer(cmd_buffers[i], g_index_buffer, 0, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(cmd_buffers[i], std::size(indices), 1, 0, 0, 0);
@@ -1249,9 +1515,16 @@ int main(int argn, const char** argv)
 
         g_global_uniform_buffer.clear();
         g_ubo_descriptor_set_layout.destroy();
+        g_texture_descriptor_set_layout.destroy();
 
-        g_descriptor_sets.destroy();
+        g_ubo_descriptor_sets.destroy();
+        g_texture_descriptor_sets.destroy();
+
         g_descriptor_pool.destroy();
+
+        g_shader_image.destroy();
+        g_shader_img_view.destroy();
+        g_shader_sampler.destroy();
 
         for (auto& m : g_shader_modules) {
             m.destroy();

@@ -3,8 +3,9 @@
 
 layout (location = 0) in vec3 a_position;
 layout (location = 1) in vec3 a_color;
+layout (location = 2) in vec3 a_uv;
 
-layout (binding = 0) uniform renderer_global {
+layout (set = 0, binding = 0) uniform renderer_global {
     mat4 u_projectopn;
     mat4 u_view;
     mat4 u_model;
@@ -12,9 +13,11 @@ layout (binding = 0) uniform renderer_global {
 } global;
 
 layout (location = 0) out vec3 v_color;
+layout (location = 1) out vec2 v_uv;
 
 void main()
 {
     gl_Position = vec4(mat3(global.u_mvp) * a_position, 1.);
     v_color = a_color;
+    v_uv = a_uv.xy;
 }

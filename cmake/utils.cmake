@@ -3,7 +3,7 @@ include(CMakeParseArguments)
 function (make_app)
     set(OPTIONS LIB)
     set(ONE_VAL_ARGS NAME LIB_TYPE)
-    set(MULTI_VAL_ARGS DEPENDS)
+    set(MULTI_VAL_ARGS DEPENDS RESOURCES_EXTENSIONS)
 
     cmake_parse_arguments(NEW_APP "${OPTIONS}" "${ONE_VAL_ARGS}" "${MULTI_VAL_ARGS}" ${ARGN})
 
@@ -57,4 +57,27 @@ function (make_app)
             DEPENDS ${SPIRV_BINARY_FILES})
 
     add_dependencies(${NEW_APP_NAME} ${NEW_APP_NAME}_SHADERS)
+
+    foreach(EXT ${NEW_APP_RESOURCES_EXTENSIONS})
+        list(APPEND NEW_APP_RESOURCES_EXTENSIONS ${CMAKE_CURRENT_LIST_DIR}/*${EXT})
+    endforeach()
+
+    file(GLOB_RECURSE NEW_APP_RESOURCES ${NEW_APP_RESOURCES_EXTENSIONS})
+
+    foreach(RESOURCE ${NEW_APP_RESOURCES})
+        file(RELATIVE_PATH REL_RESOURCE_PATH ${CMAKE_CURRENT_LIST_DIR} ${RESOURCE})
+        set(RESOURCE_COPY_PATH "${CMAKE_CURRENT_BINARY_DIR}/${REL_RESOURCE_PATH}")
+        get_filename_component(RESOURCE_DIR ${RESOURCE_COPY_PATH} DIRECTORY)
+        add_custom_command(
+                OUTPUT ${RESOURCE_COPY_PATH}
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${RESOURCE_DIR}
+                COMMAND ${CMAKE_COMMAND} -E copy ${RESOURCE} ${RESOURCE_COPY_PATH})
+        list(APPEND FINAL_RESOURCES_FILES ${RESOURCE_COPY_PATH})
+    endforeach()
+
+    add_custom_target(
+            ${NEW_APP_NAME}_RESOURCES
+            DEPENDS ${FINAL_RESOURCES_FILES})
+
+    add_dependencies(${NEW_APP_NAME} ${NEW_APP_NAME}_RESOURCES)
 endfunction()

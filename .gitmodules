@@ -10,3 +10,6 @@
 [submodule "src/third/VulkanMemoryAllocator/VulkanMemoryAllocator"]
 	path = src/third/VulkanMemoryAllocator/VulkanMemoryAllocator
 	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+[submodule "src/third/stb/stb"]
+	path = src/third/stb/stb
+	url = https://github.com/nothings/stb

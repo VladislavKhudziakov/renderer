@@ -12,8 +12,11 @@ make_app(
         glfw
         shaderc
         glm_
+        stb
         ${VK_DEPS_LIBS}
         vk_utils
         base_app
         logger
+    RESOURCES_EXTENSIONS
+        .jpg
 )

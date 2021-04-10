@@ -4,11 +4,32 @@
 
 #include <logger/log.hpp>
 #include <cstdio>
+#include <cstring>
 
+
+namespace
+{
+    template <typename... LogArgs>
+    void log(const char* fmt, LogArgs&& ...args)
+    {
+        constexpr const char* ignore[] {
+            "vmaFlushAllocation"
+        };
+
+        for (const auto* ignored : ignore) {
+            if (strstr(fmt, ignored) != nullptr) {
+                return;
+            }
+        }
+
+        printf(fmt, std::forward<LogArgs>(args)...);
+    }
+}
 #ifndef VMA_IMPLEMENTATION
     #define VMA_IMPLEMENTATION
     #ifndef NDEBUG
-        #define VMA_DEBUG_LOG(format, ...) printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
+        #define VMA_DEBUG_LOG(format, ...) log(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
+//            printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
     #endif
     #include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
 #endif
@@ -111,7 +132,7 @@ namespace
     };
 
 
-    bool check_device_queue_families(VkPhysicalDevice device, VkSurfaceKHR surface, int32_t* queue_families_indices)
+    bool check_device_queue_families(VkPhysicalDevice device, VkSurfaceKHR surface, vk_utils::context::queue_family_data* queue_families_indices)
     {
         uint32_t queue_families_count;
 
@@ -126,33 +147,50 @@ namespace
 
             vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &surface_supported);
 
-            if (surface_supported && queue_families_indices[vk_utils::context::QUEUE_TYPE_PRESENT] < 0) {
-                queue_families_indices[vk_utils::context::QUEUE_TYPE_PRESENT] = i;
+            if (surface_supported && queue_families_indices[vk_utils::context::QUEUE_TYPE_PRESENT].index < 0) {
+                queue_families_indices[vk_utils::context::QUEUE_TYPE_PRESENT].index = i;
+                queue_families_indices[vk_utils::context::QUEUE_TYPE_PRESENT].max_queue_count = 1;
             }
 
             if (p.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                if (queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS] >= 0) {
-                    if (props[i].queueCount > props[queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS]].queueCount) {
-                        queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS] = i;
+                if (queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS].index >= 0) {
+                    if (props[i].queueCount > props[queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS].index].queueCount) {
+                        queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS].index = i;
+                        queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS].max_queue_count = props[i].queueCount;
                     }
                 } else {
-                    queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS] = i;
+                    queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS].index = i;
+                    queue_families_indices[vk_utils::context::QUEUE_TYPE_GRAPHICS].max_queue_count = props[i].queueCount;
                 }
             }
 
             if (p.queueFlags & VK_QUEUE_COMPUTE_BIT) {
-                if (queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE] >= 0) {
+                if (queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].index >= 0) {
                     if (props[i].queueCount > props[vk_utils::context::QUEUE_TYPE_COMPUTE].queueCount) {
-                        queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE] = i;
+                        queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].index = i;
+                        queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].max_queue_count = props[i].queueCount;
                     }
                 } else {
-                    queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE] = i;
+                    queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].index = i;
+                    queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].max_queue_count = props[i].queueCount;
+                }
+            }
+
+            if (p.queueFlags & VK_QUEUE_TRANSFER_BIT) {
+                if (queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].index >= 0) {
+                    if (props[i].queueCount > props[vk_utils::context::QUEUE_TYPE_TRANSFER].queueCount) {
+                        queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].index = i;
+                        queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].max_queue_count = props[i].queueCount;
+                    }
+                } else {
+                    queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].index = i;
+                    queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].max_queue_count = props[i].queueCount;
                 }
             }
         }
 
         for (int i = 0; i < vk_utils::context::QUEUE_TYPE_SIZE; ++i) {
-            if (queue_families_indices[i] < 0) {
+            if (queue_families_indices[i].index < 0 && queue_families_indices[i].max_queue_count > 0) {
                 return false;
             }
         }
@@ -513,14 +551,14 @@ errors::error vk_utils::context::init_device(const context_init_info& context_in
         }
     }
 
-    if (ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS] == ctx->m_queue_families_indices[QUEUE_TYPE_PRESENT]) {
-        queue_infos_size--;
+    for (int i = 1; i < QUEUE_TYPE_SIZE; ++i) {
+        if (ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].index == ctx->m_queue_families_indices[i].index) {
+            queue_infos_size--;
+            queue_infos[QUEUE_TYPE_GRAPHICS].queueCount++;
+        }
     }
 
-    if (ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS] == ctx->m_queue_families_indices[QUEUE_TYPE_COMPUTE]) {
-        queue_infos_size--;
-    }
-
+    queue_infos[QUEUE_TYPE_GRAPHICS].queueCount = std::min(queue_infos[QUEUE_TYPE_GRAPHICS].queueCount, ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].max_queue_count);
 
     VkDeviceCreateInfo device_info{};
     device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -558,11 +596,15 @@ errors::error vk_utils::context::init_memory_allocator()
 
 errors::error vk_utils::context::request_queues()
 {
-    uint32_t curr_queue{0};
+    uint32_t graphics_queue_index{0};
 
     for (int i = 0; i < std::size(ctx->m_queue_families_indices); ++i) {
-        if (ctx->m_queue_families_indices[i] >= 0) {
-            vkGetDeviceQueue(ctx->m_device, ctx->m_queue_families_indices[i], 0, &ctx->m_queues[curr_queue++]);
+        if (ctx->m_queue_families_indices[i].index >= 0) {
+            auto curr_index = 0;
+            if (ctx->m_queue_families_indices[i].index == ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].index) {
+                curr_index = std::min(graphics_queue_index++, ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].max_queue_count - 1);
+            }
+            vkGetDeviceQueue(ctx->m_device, ctx->m_queue_families_indices[i].index, curr_index, &ctx->m_queues[i]);
         }
     }
 
@@ -582,7 +624,7 @@ vk_utils::context::~context()
 
 int32_t vk_utils::context::queue_family_index(vk_utils::context::queue_type t) const
 {
-    return m_queue_families_indices[t];
+    return m_queue_families_indices[t].index;
 }
 
 

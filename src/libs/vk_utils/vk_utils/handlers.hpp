@@ -414,47 +414,51 @@ namespace vk_utils
         VmaAllocator m_handle{nullptr};
     };
 
-
-    class vma_buffer_handler
+    template<
+        typename InitStructType,
+        typename StructType,
+        VkResult(*init_func)(VmaAllocator, const InitStructType*, const VmaAllocationCreateInfo*, StructType*, VmaAllocation*, VmaAllocationInfo*),
+        void(*destroy_func)(VmaAllocator, StructType, VmaAllocation)>
+    class vma_resource_handler
     {
     public:
-        vma_buffer_handler() = default;
-        ~vma_buffer_handler()
+        vma_resource_handler() = default;
+        ~vma_resource_handler()
         {
             destroy();
         }
-        vma_buffer_handler(const vma_buffer_handler&) = delete;
-        vma_buffer_handler& operator=(const vma_buffer_handler&) = delete;
-        vma_buffer_handler(vma_buffer_handler&& src) noexcept
+        vma_resource_handler(const vma_resource_handler&) = delete;
+        vma_resource_handler& operator=(const vma_resource_handler&) = delete;
+        vma_resource_handler(vma_resource_handler&& src) noexcept
         {
             *this = std::move(src);
         }
 
-        vma_buffer_handler& operator=(vma_buffer_handler&& src) noexcept
+        vma_resource_handler& operator=(vma_resource_handler&& src) noexcept
         {
             if (this == &src) {
                 return *this;
             }
-            std::swap(m_buffer, src.m_buffer);
+            std::swap(m_resource, src.m_resource);
             std::swap(m_allocation, src.m_allocation);
             std::swap(m_allocator, src.m_allocator);
             return *this;
         }
 
-        VkResult init(VmaAllocator allocator, VkBufferCreateInfo* buffer_info, VmaAllocationCreateInfo* alloc_info)
+        VkResult init(VmaAllocator allocator, InitStructType* init_info, VmaAllocationCreateInfo* alloc_info)
         {
             destroy();
             m_allocator = allocator;
-            return vmaCreateBuffer(m_allocator, buffer_info, alloc_info, &m_buffer, &m_allocation, &m_alloc_info);
+            return init_func(m_allocator, init_info, alloc_info, &m_resource, &m_allocation, &m_alloc_info);
         }
 
         void destroy()
         {
-            if (m_allocator != nullptr && m_buffer != nullptr && m_allocation != nullptr) {
-                vmaDestroyBuffer(m_allocator, m_buffer, m_allocation);
+            if (m_allocator != nullptr && m_resource != nullptr && m_allocation != nullptr) {
+                destroy_func(m_allocator, m_resource, m_allocation);
 
                 m_allocator = nullptr;
-                m_buffer = nullptr;
+                m_resource = nullptr;
                 m_allocation = nullptr;
             }
         }
@@ -464,9 +468,9 @@ namespace vk_utils
             return m_alloc_info;
         }
 
-        operator VkBuffer() const
+        operator StructType() const
         {
-            return m_buffer;
+            return m_resource;
         }
 
         operator VmaAllocation() const
@@ -474,9 +478,9 @@ namespace vk_utils
             return m_allocation;
         }
 
-        operator const VkBuffer*() const
+        operator const StructType*() const
         {
-            return &m_buffer;
+            return &m_resource;
         }
 
         operator const VmaAllocation*() const
@@ -486,7 +490,7 @@ namespace vk_utils
 
     private:
         VmaAllocator m_allocator{nullptr};
-        VkBuffer m_buffer{nullptr};
+        StructType m_resource{nullptr};
         VmaAllocation m_allocation{nullptr};
         VmaAllocationInfo m_alloc_info{};
     };
@@ -533,14 +537,25 @@ namespace vk_utils
     using descriptor_pool_handler =
         default_device_scoped_handler<VkDescriptorPoolCreateInfo, VkDescriptorPool, vkCreateDescriptorPool, vkDestroyDescriptorPool>;
 
+    using image_view_handler =
+        default_device_scoped_handler<VkImageViewCreateInfo, VkImageView, vkCreateImageView, vkDestroyImageView>;
+
+    using sampler_handler =
+        default_device_scoped_handler<VkSamplerCreateInfo, VkSampler, vkCreateSampler, vkDestroySampler>;
+
     using descriptor_set_handler =
         allocated_handler<VkDevice, VkDescriptorPool, VkDescriptorSetAllocateInfo, VkDescriptorSet, VkResult, vkAllocateDescriptorSets, vkFreeDescriptorSets>;
+
+    using vma_buffer_handler =
+        vma_resource_handler<VkBufferCreateInfo, VkBuffer, vmaCreateBuffer, vmaDestroyBuffer>;
+
+    using vma_image_handler =
+        vma_resource_handler<VkImageCreateInfo, VkImage, vmaCreateImage, vmaDestroyImage>;
 
     using surface_handler =
         default_instance_scoped_handler<VK_UTILS_SURFACE_CREATE_INFO_TYPE, VkSurfaceKHR, VK_UTILS_SURFACE_CREATE_FUNCTION, vkDestroySurfaceKHR>;
 
     using debug_messenger_handler =
         default_instance_scoped_handler<VkDebugUtilsMessengerCreateInfoEXT, VkDebugUtilsMessengerEXT, detail::vkCreateDebugUtilsMessengerEXT, detail::vkDestroyDebugUtilsMessengerEXT>;
-
 
 } // namespace vk_utils
