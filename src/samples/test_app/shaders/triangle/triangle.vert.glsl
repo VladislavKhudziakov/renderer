@@ -17,7 +17,7 @@ layout (location = 1) out vec2 v_uv;
 
 void main()
 {
-    gl_Position = vec4(mat3(global.u_mvp) * a_position, 1.);
+    gl_Position = global.u_mvp * vec4(a_position, 1.);
     v_color = a_color;
     v_uv = a_uv.xy;
 }

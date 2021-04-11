@@ -45,11 +45,10 @@ vk_utils::vma_buffer_handler g_vertex_staging_buffer;
 vk_utils::vma_buffer_handler g_index_buffer;
 vk_utils::vma_buffer_handler g_index_staging_buffer;
 
-std::vector<vk_utils::vma_buffer_handler> g_global_uniform_buffer;
+vk_utils::vma_buffer_handler g_global_uniform_buffer;
 
 vk_utils::descriptor_set_layout_handler g_ubo_descriptor_set_layout;
 vk_utils::descriptor_set_layout_handler g_texture_descriptor_set_layout;
-
 
 vk_utils::descriptor_pool_handler g_descriptor_pool;
 vk_utils::descriptor_set_handler g_ubo_descriptor_sets;
@@ -464,25 +463,46 @@ private:
         pass_create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         pass_create_info.pNext = nullptr;
 
-        VkAttachmentDescription pass_attachment{};
+        VkAttachmentDescription pass_attachments[] {
+            {
+                .format = m_swapchain_create_info->imageFormat,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            },
+            {
+                .format = VK_FORMAT_D24_UNORM_S8_UINT,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            }
+        };
 
-        pass_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        pass_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        pass_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        pass_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        pass_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        pass_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        pass_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        pass_attachment.format = m_swapchain_create_info->imageFormat;
+        VkAttachmentReference refs [] {
+            {
+                .attachment = 0,
+                .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            },
+            {
+                .attachment = 1,
+                .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            }
+        };
 
-        VkAttachmentReference ref{};
-        ref.attachment = 0;
-        ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         VkSubpassDescription subpass_description{};
         subpass_description.colorAttachmentCount = 1;
-        subpass_description.pColorAttachments = &ref;
+        subpass_description.pColorAttachments = &refs[0];
         subpass_description.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass_description.pDepthStencilAttachment = &refs[1];
 
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -492,8 +512,8 @@ private:
         dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-        pass_create_info.pAttachments = &pass_attachment;
-        pass_create_info.attachmentCount = 1;
+        pass_create_info.pAttachments = pass_attachments;
+        pass_create_info.attachmentCount = std::size(pass_attachments);
         pass_create_info.pSubpasses = &subpass_description;
         pass_create_info.subpassCount = 1;
         pass_create_info.pDependencies = &dependency;
@@ -556,15 +576,6 @@ private:
         img_view_create_info.subresourceRange.levelCount = 1;
         img_view_create_info.format = m_swapchain_create_info->imageFormat;
 
-        VkFramebufferCreateInfo fb_create_info{};
-        fb_create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fb_create_info.pNext = nullptr;
-        fb_create_info.renderPass = m_pass;
-        fb_create_info.attachmentCount = 1;
-        fb_create_info.width = m_swapchain_create_info->imageExtent.width;
-        fb_create_info.height = m_swapchain_create_info->imageExtent.height;
-        fb_create_info.layers = 1;
-
         for (int i = 0; i < images_count; ++i) {
             img_view_create_info.image = m_swapchain_images[i];
             vk_utils::img_view_handler h{};
@@ -577,9 +588,80 @@ private:
             }
 
             m_swapchain_img_views.emplace_back(std::move(h));
-            VkImageView view = m_swapchain_img_views.back();
+        }
 
-            fb_create_info.pAttachments = &view;
+        VkImageCreateInfo depth_img_info{};
+        depth_img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        depth_img_info.pNext = nullptr;
+
+        depth_img_info.imageType = VK_IMAGE_TYPE_2D;
+        depth_img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        depth_img_info.extent.width = m_swapchain_create_info->imageExtent.width;
+        depth_img_info.extent.height = m_swapchain_create_info->imageExtent.height;
+        depth_img_info.extent.depth = 1;
+        depth_img_info.mipLevels = 1;
+        depth_img_info.arrayLayers = 1;
+
+        depth_img_info.format = VK_FORMAT_D24_UNORM_S8_UINT;
+        depth_img_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        depth_img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depth_img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        depth_img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+
+        VmaAllocationCreateInfo depth_alloc_info{};
+        depth_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        if (const auto err = m_depth_image.init(vk_utils::context::get().allocator(), &depth_img_info, &depth_alloc_info); err != VK_SUCCESS) {
+            m_swapchain_img_views.clear();
+            m_framebuffers.clear();
+            return err;
+        }
+
+        VkImageViewCreateInfo depth_img_view_info{};
+        depth_img_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        depth_img_view_info.pNext = nullptr;
+        depth_img_view_info.image = m_depth_image;
+        depth_img_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+
+        depth_img_view_info.format = depth_img_info.format;
+
+        depth_img_view_info.components.r = VK_COMPONENT_SWIZZLE_R;
+        depth_img_view_info.components.g = VK_COMPONENT_SWIZZLE_G;
+        depth_img_view_info.components.b = VK_COMPONENT_SWIZZLE_B;
+        depth_img_view_info.components.a = VK_COMPONENT_SWIZZLE_A;
+
+        depth_img_view_info.subresourceRange.layerCount = 1;
+        depth_img_view_info.subresourceRange.baseArrayLayer = 0;
+        depth_img_view_info.subresourceRange.levelCount = 1;
+        depth_img_view_info.subresourceRange.baseMipLevel = 0;
+        depth_img_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+
+        if (const auto err = m_depth_image_view.reset(vk_utils::context::get().device(), &depth_img_view_info); err != VK_SUCCESS) {
+            m_swapchain_img_views.clear();
+            m_framebuffers.clear();
+            m_depth_image.destroy();
+            return err;
+        }
+
+        VkFramebufferCreateInfo fb_create_info{};
+        fb_create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fb_create_info.pNext = nullptr;
+        fb_create_info.renderPass = m_pass;
+
+        fb_create_info.width = m_swapchain_create_info->imageExtent.width;
+        fb_create_info.height = m_swapchain_create_info->imageExtent.height;
+        fb_create_info.layers = 1;
+
+        for (int i = 0; i < images_count; ++i) {
+            VkImageView fb_attachments[] = {
+                m_swapchain_img_views[i],
+                m_depth_image_view
+            };
+
+            fb_create_info.pAttachments = fb_attachments;
+            fb_create_info.attachmentCount = std::size(fb_attachments);
+
             vk_utils::framebuffer_handler fb_handle{};
 
             res = fb_handle.init(vk_utils::context::get().device(), &fb_create_info);
@@ -587,6 +669,8 @@ private:
             if (res != VK_SUCCESS) {
                 m_swapchain_img_views.clear();
                 m_framebuffers.clear();
+                m_depth_image.destroy();
+                m_depth_image_view.destroy();
                 return res;
             }
 
@@ -607,6 +691,8 @@ private:
     std::vector<VkImage> m_swapchain_images;
     std::vector<vk_utils::img_view_handler> m_swapchain_img_views;
     std::vector<vk_utils::framebuffer_handler> m_framebuffers;
+    vk_utils::vma_image_handler m_depth_image;
+    vk_utils::image_view_handler m_depth_image_view;
 
     uint32_t m_image_index{};
 
@@ -727,24 +813,43 @@ int32_t load_shader(const std::string& path, VkDevice device, vk_utils::shader_m
 
 float vert_data[][3]{
     {-0.5, -0.5, 0.0},
-    {1., 1., 1.},
-    {0.0, 0.0, 0.0},
+    {1., 0., 0.},
+    {1.0, 0.0, 0.0},
 
-    {-0.5, 0.5, 0.0},
+    {0.5, -0.5, 0.0},
     {0., 1., 0.},
-    {0.0, 1.0, 0.0},
+    {0.0, 0.0, 0.0},
 
     {0.5, 0.5, 0.0},
     {0., 0., 1.},
+    {0.0, 1.0, 0.0},
+
+    {-0.5, 0.5, 0.0},
+    {1., 0., 1.},
     {1.0, 1.0, 0.0},
 
-    {0.5, -0.5, 0.0},
-    {1., 0., 1.},
-    {1.0, 0.0, 0.0},
+    // ----
+    {-0.5f, -0.5f, -0.5f},
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 0.0f},
+
+    {0.5f, -0.5f, -0.5f},
+    {0.0f, 1.0f, 0.0f},
+    {1.0f, 0.0f, 0.0f},
+
+    {0.5f, 0.5f, -0.5f},
+    {0.0f, 0.0f, 1.0f},
+    {1.0f, 1.0f, 0.0f},
+
+    {-0.5f, 0.5f, -0.5f},
+    {1.0f, 1.0f, 1.0f},
+    {0.0f, 1.0f, 0.0f}
 };
 
 uint16_t indices[] = {
-    0, 1, 2, 0, 2, 3};
+    0, 1, 2, 2, 3, 0,
+    4, 5, 6, 6, 7, 4
+};
 
 
 struct global_ubo
@@ -1205,6 +1310,16 @@ int32_t init_pipeline(const hello_triangle_app* app)
         VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipeline_create_info.pNext = nullptr;
 
+    VkPipelineDepthStencilStateCreateInfo depth_stencil_info{};
+    depth_stencil_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil_info.pNext = nullptr;
+    depth_stencil_info.flags = 0;
+    depth_stencil_info.depthTestEnable = VK_TRUE;
+    depth_stencil_info.depthWriteEnable = VK_TRUE;
+    depth_stencil_info.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    depth_stencil_info.stencilTestEnable = VK_FALSE;
+    depth_stencil_info.depthBoundsTestEnable = VK_FALSE;
+
     pipeline_create_info.pStages = shader_stages_infos;
     pipeline_create_info.stageCount = std::size(shaders_paths_glsl);
     pipeline_create_info.pVertexInputState = &vert_input_info;
@@ -1212,7 +1327,7 @@ int32_t init_pipeline(const hello_triangle_app* app)
     pipeline_create_info.pViewportState = &viewport_state;
     pipeline_create_info.pRasterizationState = &rasterization_info;
     pipeline_create_info.pMultisampleState = &multisample_info;
-    pipeline_create_info.pDepthStencilState = nullptr;
+    pipeline_create_info.pDepthStencilState = &depth_stencil_info;
     pipeline_create_info.pColorBlendState = &color_blend_info;
     pipeline_create_info.pDynamicState = nullptr;
     pipeline_create_info.layout = g_pipeline_layout;
@@ -1286,6 +1401,30 @@ int32_t init_pipeline(const hello_triangle_app* app)
         copy_info.size = sizeof(indices);
         vkCmdCopyBuffer(g_data_copy_cmd_buffers[0], g_index_staging_buffer, g_index_buffer, 1, &copy_info);
 
+        VkBufferMemoryBarrier buffers_mem_barrier[2];
+
+        buffers_mem_barrier[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        buffers_mem_barrier[0].pNext = nullptr;
+        buffers_mem_barrier[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        buffers_mem_barrier[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        buffers_mem_barrier[0].size =  sizeof(vert_data);
+        buffers_mem_barrier[0].offset = 0;
+        buffers_mem_barrier[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        buffers_mem_barrier[0].dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        buffers_mem_barrier[0].buffer = g_vertex_buffer;
+
+        buffers_mem_barrier[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        buffers_mem_barrier[1].pNext = nullptr;
+        buffers_mem_barrier[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        buffers_mem_barrier[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        buffers_mem_barrier[1].size =  sizeof(indices);
+        buffers_mem_barrier[1].offset = 0;
+        buffers_mem_barrier[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        buffers_mem_barrier[1].dstAccessMask = VK_ACCESS_INDEX_READ_BIT;
+        buffers_mem_barrier[1].buffer = g_index_buffer;
+
+        vkCmdPipelineBarrier(g_data_copy_cmd_buffers[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, nullptr, std::size(buffers_mem_barrier), buffers_mem_barrier, 0, nullptr);
+
         vkEndCommandBuffer(g_data_copy_cmd_buffers[0]);
 
         vert_buffer_copied = true;
@@ -1295,12 +1434,7 @@ int32_t init_pipeline(const hello_triangle_app* app)
     static bool ubos_created = false;
 
     if (!ubos_created) {
-        g_global_uniform_buffer.resize(fbs.size());
-
-        for (auto& ubo : g_global_uniform_buffer) {
-            create_buffer(ubo, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo));
-        }
-
+        create_buffer(g_global_uniform_buffer, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo));
         ubos_created = true;
     }
 
@@ -1373,7 +1507,7 @@ int32_t init_pipeline(const hello_triangle_app* app)
             tex_write_desc_set.dstSet = g_texture_descriptor_sets[i];
             VkDescriptorBufferInfo buffer_info{};
 
-            buffer_info.buffer = g_global_uniform_buffer[i];
+            buffer_info.buffer = g_global_uniform_buffer;
             buffer_info.offset = 0;
             buffer_info.range = VK_WHOLE_SIZE;
             ubo_write_desc_set.pBufferInfo = &buffer_info;
@@ -1400,11 +1534,18 @@ int32_t init_pipeline(const hello_triangle_app* app)
         .offset = {0, 0},
         .extent = app->get_window_size()};
 
-    pass_begin_info.clearValueCount = 1;
+    VkClearValue clears[]
+    {
+        {
+            .color = {.2, .3, .7, 1.}
+        },
+        {
+            .depthStencil = {.depth = 1.0f, .stencil = 0}
+        }
+    };
 
-    VkClearValue clear{};
-    clear.color = VkClearColorValue{.float32 = {.2, .3, .7, 1.}};
-    pass_begin_info.pClearValues = &clear;
+    pass_begin_info.pClearValues = clears;
+    pass_begin_info.clearValueCount = std::size(clears);
 
     for (int i = 0; i < fbs.size(); ++i) {
         auto res = vkBeginCommandBuffer(cmd_buffers[i], &cmd_buf_begin_info);
@@ -1448,17 +1589,15 @@ int main(int argn, const char** argv)
 
         static global_ubo ubo_data{};
         ubo_data.model = glm::rotate(ubo_data.model, glm::radians(0.1f), glm::vec3{0.0f, 0.0f, 1.0f});
-        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(app->get_window_size().width), float(app->get_window_size().height), 0.01f, 10.0f);
-        ubo_data.projection[1][1] *= -1.0f;
-        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 0.0f, -1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
-        ubo_data.mvp = ubo_data.model * ubo_data.view * ubo_data.projection;
+        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(app->get_window_size().width), float(app->get_window_size().height), 0.01f, 100.0f);
+        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 1.0f, -1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+        ubo_data.mvp = ubo_data.projection * ubo_data.view * ubo_data.model;
 
-        auto& ubo = g_global_uniform_buffer[app->get_current_swapchain_img_index()];
         void* mapped_data;
-        vmaMapMemory(vk_utils::context::get().allocator(), ubo, &mapped_data);
+        vmaMapMemory(vk_utils::context::get().allocator(), g_global_uniform_buffer, &mapped_data);
         std::memcpy(mapped_data, &ubo_data, sizeof(ubo_data));
-        vmaFlushAllocation(vk_utils::context::get().allocator(), ubo, 0, VK_WHOLE_SIZE);
-        vmaUnmapMemory(vk_utils::context::get().allocator(), ubo);
+        vmaFlushAllocation(vk_utils::context::get().allocator(), g_global_uniform_buffer, 0, VK_WHOLE_SIZE);
+        vmaUnmapMemory(vk_utils::context::get().allocator(), g_global_uniform_buffer);
 
         static VkCommandBuffer handlers[2];
         handlers[1] = g_draw_cmd_buffers[app->get_current_swapchain_img_index()];
@@ -1497,7 +1636,7 @@ int main(int argn, const char** argv)
         g_index_buffer.destroy();
         g_index_staging_buffer.destroy();
 
-        g_global_uniform_buffer.clear();
+        g_global_uniform_buffer.destroy();
         g_ubo_descriptor_set_layout.destroy();
         g_texture_descriptor_set_layout.destroy();
 
