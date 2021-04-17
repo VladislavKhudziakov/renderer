@@ -1,6 +1,6 @@
 include(CMakeParseArguments)
 
-function (make_app)
+function (make_bin)
     set(OPTIONS LIB)
     set(ONE_VAL_ARGS NAME LIB_TYPE)
     set(MULTI_VAL_ARGS DEPENDS RESOURCES_EXTENSIONS)

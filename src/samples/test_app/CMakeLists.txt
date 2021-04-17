@@ -5,7 +5,7 @@ else()
     error("TODO")
 endif()
 
-make_app(
+make_bin(
     NAME
         test_app
     DEPENDS

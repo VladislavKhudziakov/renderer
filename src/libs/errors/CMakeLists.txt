@@ -1,5 +1,5 @@
 
-make_app(
+make_bin(
     NAME
         errors
     LIB

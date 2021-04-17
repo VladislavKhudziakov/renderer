@@ -1,6 +1,6 @@
 
 
-make_app(
+make_bin(
     NAME
         vk_utils
     LIB
