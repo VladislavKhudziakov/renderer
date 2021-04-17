@@ -13,10 +13,14 @@ make_app(
         shaderc
         glm_
         stb
+        tinyobjloader
         ${VK_DEPS_LIBS}
         vk_utils
         base_app
         logger
     RESOURCES_EXTENSIONS
         .jpg
+        .png
+        .obj
+        .mtl
 )

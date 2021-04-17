@@ -506,31 +506,28 @@ ERROR_TYPE vk_utils::context::init_device(const context_init_info& context_init_
 #endif
         device_layers_list);
 
-    uint32_t queue_infos_size = 0;
-    VkDeviceQueueCreateInfo queue_infos[QUEUE_TYPE_SIZE]{};
-
-    float priority = 1.0;
+    std::vector<VkDeviceQueueCreateInfo> out_infos{};
+    out_infos.reserve(QUEUE_TYPE_SIZE);
+    std::vector<float> priorities(QUEUE_TYPE_SIZE, 1.0f);
 
     for (int i = 0; i < QUEUE_TYPE_SIZE; ++i) {
-        if (auto idx = context::get().queue_family_index(static_cast<queue_type>(i)); idx >= 0) {
-            queue_infos[queue_infos_size++] = {
+        auto it = std::find_if(out_infos.begin(), out_infos.end(), [i](const VkDeviceQueueCreateInfo& info) {
+            return info.queueFamilyIndex == ctx->m_queue_families_indices[i].index;
+        });
+        if (it != out_infos.end()) {
+            it->queueCount = std::min(it->queueCount +1, ctx->m_queue_families_indices[i].max_queue_count);
+            ctx->m_queue_families_indices[i].queue_index = it->queueCount - 1;
+        } else {
+            out_infos.push_back(VkDeviceQueueCreateInfo {
                 .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                 .pNext = nullptr,
-                .queueFamilyIndex = static_cast<uint32_t>(idx),
-                .queueCount = 1,
-                .pQueuePriorities = &priority,
-            };
+                .flags = 0,
+                .queueFamilyIndex = static_cast<uint32_t>(ctx->m_queue_families_indices[i].index),
+                .pQueuePriorities = priorities.data(),
+            });
+            ctx->m_queue_families_indices[i].queue_index = 0;
         }
     }
-
-    for (int i = 1; i < QUEUE_TYPE_SIZE; ++i) {
-        if (ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].index == ctx->m_queue_families_indices[i].index) {
-            queue_infos_size--;
-            queue_infos[QUEUE_TYPE_GRAPHICS].queueCount++;
-        }
-    }
-
-    queue_infos[QUEUE_TYPE_GRAPHICS].queueCount = std::min(queue_infos[QUEUE_TYPE_GRAPHICS].queueCount, ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].max_queue_count);
 
     VkDeviceCreateInfo device_info{};
     device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -539,8 +536,8 @@ ERROR_TYPE vk_utils::context::init_device(const context_init_info& context_init_
     device_info.enabledExtensionCount = device_extensions_list.size();
     device_info.ppEnabledLayerNames = device_layers_list.data();
     device_info.enabledLayerCount = device_layers_list.size();
-    device_info.pQueueCreateInfos = queue_infos;
-    device_info.queueCreateInfoCount = queue_infos_size;
+    device_info.pQueueCreateInfos = out_infos.data();
+    device_info.queueCreateInfoCount = out_infos.size();
 
     if (auto err = ctx->m_device.init(context::get().gpu(), &device_info); err != VK_SUCCESS) {
         RAISE_ERROR_FATAL(err, "cannot initialize logical device");
@@ -570,11 +567,7 @@ ERROR_TYPE vk_utils::context::request_queues()
 
     for (int i = 0; i < std::size(ctx->m_queue_families_indices); ++i) {
         if (ctx->m_queue_families_indices[i].index >= 0) {
-            auto curr_index = 0;
-            if (ctx->m_queue_families_indices[i].index == ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].index) {
-                curr_index = std::min(graphics_queue_index++, ctx->m_queue_families_indices[QUEUE_TYPE_GRAPHICS].max_queue_count - 1);
-            }
-            vkGetDeviceQueue(ctx->m_device, ctx->m_queue_families_indices[i].index, curr_index, &ctx->m_queues[i]);
+            vkGetDeviceQueue(ctx->m_device, ctx->m_queue_families_indices[i].index, ctx->m_queue_families_indices[i].queue_index, &ctx->m_queues[i]);
         }
     }
 

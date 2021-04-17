@@ -19,9 +19,14 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <unordered_set>
+#include <variant>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
 
 const char* shaders_paths_spv[]{
     "./shaders/triangle/triangle.vert.glsl.spv",
@@ -463,7 +468,7 @@ private:
         pass_create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         pass_create_info.pNext = nullptr;
 
-        VkAttachmentDescription pass_attachments[] {
+        VkAttachmentDescription pass_attachments[]{
             {
                 .format = m_swapchain_create_info->imageFormat,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -483,10 +488,9 @@ private:
                 .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                 .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            }
-        };
+            }};
 
-        VkAttachmentReference refs [] {
+        VkAttachmentReference refs[]{
             {
                 .attachment = 0,
                 .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -494,8 +498,7 @@ private:
             {
                 .attachment = 1,
                 .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            }
-        };
+            }};
 
 
         VkSubpassDescription subpass_description{};
@@ -656,8 +659,7 @@ private:
         for (int i = 0; i < images_count; ++i) {
             VkImageView fb_attachments[] = {
                 m_swapchain_img_views[i],
-                m_depth_image_view
-            };
+                m_depth_image_view};
 
             fb_create_info.pAttachments = fb_attachments;
             fb_create_info.attachmentCount = std::size(fb_attachments);
@@ -811,46 +813,6 @@ int32_t load_shader(const std::string& path, VkDevice device, vk_utils::shader_m
     return -1;
 }
 
-float vert_data[][3]{
-    {-0.5, -0.5, 0.0},
-    {1., 0., 0.},
-    {1.0, 0.0, 0.0},
-
-    {0.5, -0.5, 0.0},
-    {0., 1., 0.},
-    {0.0, 0.0, 0.0},
-
-    {0.5, 0.5, 0.0},
-    {0., 0., 1.},
-    {0.0, 1.0, 0.0},
-
-    {-0.5, 0.5, 0.0},
-    {1., 0., 1.},
-    {1.0, 1.0, 0.0},
-
-    // ----
-    {-0.5f, -0.5f, -0.5f},
-    {1.0f, 0.0f, 0.0f},
-    {0.0f, 0.0f, 0.0f},
-
-    {0.5f, -0.5f, -0.5f},
-    {0.0f, 1.0f, 0.0f},
-    {1.0f, 0.0f, 0.0f},
-
-    {0.5f, 0.5f, -0.5f},
-    {0.0f, 0.0f, 1.0f},
-    {1.0f, 1.0f, 0.0f},
-
-    {-0.5f, 0.5f, -0.5f},
-    {1.0f, 1.0f, 1.0f},
-    {0.0f, 1.0f, 0.0f}
-};
-
-uint16_t indices[] = {
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4
-};
-
 
 struct global_ubo
 {
@@ -903,12 +865,20 @@ ERROR_TYPE create_buffer(
 }
 
 
-ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk_utils::image_view_handler& img_view, vk_utils::sampler_handler& sampler)
+ERROR_TYPE load_image2D(
+    const char* path,
+    const vk_utils::cmd_pool_handler& cmd_pool,
+    bool gen_mips,
+    vk_utils::vma_image_handler& image,
+    vk_utils::image_view_handler& img_view,
+    vk_utils::sampler_handler& sampler)
 {
     int w, h, c;
     std::unique_ptr<stbi_uc, std::function<void(stbi_uc*)>> image_handler{
         stbi_load(path, &w, &h, &c, 0),
         [](stbi_uc* ptr) {if (ptr != nullptr) stbi_image_free(ptr); }};
+
+    const auto mip_levels = !gen_mips ? 1 : static_cast<uint32_t>(log2(std::max(w, h))) + 1;
 
     if (image_handler == nullptr) {
         RAISE_ERROR_WARN(-1, "Cannot load image.");
@@ -916,20 +886,44 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
 
     uint32_t draw_queue_family = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
 
+
+    VkFormatProperties props;
+    vkGetPhysicalDeviceFormatProperties(vk_utils::context::get().gpu(), VK_FORMAT_R8G8B8_SRGB, &props);
+
+    bool add_alpha = false;
+    if (c == STBI_rgb && !(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+        c = STBI_rgb_alpha;
+        add_alpha = true;
+    }
+
+    uint8_t* data_ptr = image_handler.get();
+    std::vector<uint8_t> bytes;
+
+    if (add_alpha) {
+        bytes.reserve(w * h * c);
+        for (size_t i = 0; i < w * h; ++i) {
+            bytes.push_back(data_ptr[i * 3]);
+            bytes.push_back(data_ptr[i * 3 + 1]);
+            bytes.push_back(data_ptr[i * 3 + 2]);
+            bytes.push_back(255);
+        }
+        data_ptr = bytes.data();
+    }
+
     vk_utils::vma_buffer_handler staging_buffer{};
-    create_buffer(staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, w * h * c, image_handler.get());
+    create_buffer(staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, w * h * c, data_ptr);
 
     VkImageCreateInfo image_info{};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     image_info.pNext = nullptr;
     image_info.flags = 0;
-    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     image_info.imageType = VK_IMAGE_TYPE_2D;
     image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
     image_info.arrayLayers = 1;
-    image_info.mipLevels = 1;
+    image_info.mipLevels = mip_levels;
     image_info.extent = {
         .width = static_cast<uint32_t>(w),
         .height = static_cast<uint32_t>(h),
@@ -943,13 +937,13 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
             components.r = VK_COMPONENT_SWIZZLE_R;
             components.g = VK_COMPONENT_SWIZZLE_R;
             components.b = VK_COMPONENT_SWIZZLE_R;
-            components.a = VK_COMPONENT_SWIZZLE_A;
+            components.a = VK_COMPONENT_SWIZZLE_ONE;
             break;
         case STBI_grey_alpha:
             image_info.format = VK_FORMAT_R8G8_SRGB;
             components.r = VK_COMPONENT_SWIZZLE_R;
-            components.g = VK_COMPONENT_SWIZZLE_B;
-            components.b = VK_COMPONENT_SWIZZLE_B;
+            components.g = VK_COMPONENT_SWIZZLE_ZERO;
+            components.b = VK_COMPONENT_SWIZZLE_ZERO;
             components.a = VK_COMPONENT_SWIZZLE_G;
             break;
         case STBI_rgb:
@@ -957,7 +951,7 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
             components.r = VK_COMPONENT_SWIZZLE_R;
             components.g = VK_COMPONENT_SWIZZLE_G;
             components.b = VK_COMPONENT_SWIZZLE_B;
-            components.a = VK_COMPONENT_SWIZZLE_A;
+            components.a = VK_COMPONENT_SWIZZLE_ONE;
             break;
         case STBI_rgb_alpha:
             image_info.format = VK_FORMAT_R8G8B8A8_SRGB;
@@ -987,7 +981,7 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
     img_view_info.subresourceRange.baseArrayLayer = 0;
     img_view_info.subresourceRange.layerCount = 1;
     img_view_info.subresourceRange.baseMipLevel = 0;
-    img_view_info.subresourceRange.levelCount = 1;
+    img_view_info.subresourceRange.levelCount = mip_levels;
     img_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 
     if (const auto e = img_view.init(vk_utils::context::get().device(), &img_view_info); e != VK_SUCCESS) {
@@ -1006,7 +1000,7 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
     sampler_info.maxAnisotropy = 0;
     sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     sampler_info.minLod = 0;
-    sampler_info.maxLod = 0;
+    sampler_info.maxLod = mip_levels - 1;
     sampler_info.mipLodBias = 0;
     sampler_info.compareEnable = VK_FALSE;
 
@@ -1018,11 +1012,11 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
     buffer_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     buffer_alloc_info.pNext = nullptr;
     buffer_alloc_info.commandBufferCount = 1;
-    buffer_alloc_info.commandPool = g_cmd_pool;
+    buffer_alloc_info.commandPool = cmd_pool;
     buffer_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
     vk_utils::cmd_buffers_handler cmd_buffer{};
-    cmd_buffer.init(vk_utils::context::get().device(), g_cmd_pool, &buffer_alloc_info, 1);
+    cmd_buffer.init(vk_utils::context::get().device(), cmd_pool, &buffer_alloc_info, 1);
 
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1047,7 +1041,7 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
     img_transfer_barrier.subresourceRange.baseArrayLayer = 0;
     img_transfer_barrier.subresourceRange.layerCount = 1;
     img_transfer_barrier.subresourceRange.baseMipLevel = 0;
-    img_transfer_barrier.subresourceRange.levelCount = 1;
+    img_transfer_barrier.subresourceRange.levelCount = mip_levels;
     img_transfer_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 
     vkCmdPipelineBarrier(cmd_buffer[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &img_transfer_barrier);
@@ -1064,26 +1058,143 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
     img_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 
     vkCmdCopyBufferToImage(cmd_buffer[0], staging_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &img_copy);
+    if (gen_mips) {
+        std::vector<VkImageMemoryBarrier> barriers_list{};
+        barriers_list.reserve(mip_levels + 1);
 
-    VkImageMemoryBarrier img_barrier{};
-    img_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    img_barrier.pNext = nullptr;
-    img_barrier.image = image;
-    img_barrier.srcAccessMask = 0;
-    img_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    img_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    img_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    img_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    img_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkImageMemoryBarrier mip_gen_barriers{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            }
+        };
 
-    img_barrier.subresourceRange.layerCount = 1;
-    img_barrier.subresourceRange.baseArrayLayer = 0;
-    img_barrier.subresourceRange.layerCount = 1;
-    img_barrier.subresourceRange.baseMipLevel = 0;
-    img_barrier.subresourceRange.levelCount = 1;
-    img_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        uint32_t mip_width = w;
+        uint32_t mip_height = h;
 
-    vkCmdPipelineBarrier(cmd_buffer[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &img_barrier);
+        for (uint32_t i = 1; i < mip_levels; ++i) {
+            mip_gen_barriers.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            mip_gen_barriers.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            mip_gen_barriers.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            mip_gen_barriers.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            mip_gen_barriers.subresourceRange.baseMipLevel = i - 1;
+
+            vkCmdPipelineBarrier(
+                cmd_buffer[0],
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0,
+                nullptr,
+                0,
+                nullptr,
+                1,
+                &mip_gen_barriers);
+
+            VkImageBlit blit_region{};
+
+            blit_region.srcOffsets[0].x = 0;
+            blit_region.srcOffsets[0].y = 0;
+            blit_region.srcOffsets[0].z = 0;
+            blit_region.srcOffsets[1].x = mip_width;
+            blit_region.srcOffsets[1].y = mip_height;
+            blit_region.srcOffsets[1].z = 1;
+
+            blit_region.srcSubresource.baseArrayLayer = 0;
+            blit_region.srcSubresource.layerCount = 1;
+            blit_region.srcSubresource.mipLevel = i - 1;
+            blit_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+            mip_width = std::max(1u, mip_width / 2);
+            mip_height = std::max(1u, mip_height / 2);
+
+            blit_region.dstOffsets[0].x = 0;
+            blit_region.dstOffsets[0].y = 0;
+            blit_region.dstOffsets[0].z = 0;
+            blit_region.dstOffsets[1].x = mip_width;
+            blit_region.dstOffsets[1].y = mip_height;
+            blit_region.dstOffsets[1].z = 1;
+
+            blit_region.dstSubresource.baseArrayLayer = 0;
+            blit_region.dstSubresource.layerCount = 1;
+            blit_region.dstSubresource.mipLevel = i;
+            blit_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+            vkCmdBlitImage(
+                cmd_buffer[0],
+                image,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1,
+                &blit_region,
+                VK_FILTER_LINEAR);
+        }
+        mip_gen_barriers.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        mip_gen_barriers.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mip_gen_barriers.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mip_gen_barriers.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        mip_gen_barriers.subresourceRange.baseMipLevel = 0;
+        mip_gen_barriers.subresourceRange.levelCount = mip_levels - 1;
+
+        vkCmdPipelineBarrier(
+            cmd_buffer[0],
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+            0,
+            0,
+            nullptr,
+            0,
+            nullptr,
+            1,
+            &mip_gen_barriers);
+
+        mip_gen_barriers.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        mip_gen_barriers.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mip_gen_barriers.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mip_gen_barriers.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        mip_gen_barriers.subresourceRange.baseMipLevel = mip_levels - 1;
+        mip_gen_barriers.subresourceRange.levelCount = 1;
+
+        vkCmdPipelineBarrier(
+            cmd_buffer[0],
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+            0,
+            0,
+            nullptr,
+            0,
+            nullptr,
+            1,
+            &mip_gen_barriers);
+    } else {
+        VkImageMemoryBarrier img_barrier{};
+        img_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        img_barrier.pNext = nullptr;
+        img_barrier.image = image;
+        img_barrier.srcAccessMask = 0;
+        img_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        img_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        img_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        img_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        img_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        img_barrier.subresourceRange.layerCount = 1;
+        img_barrier.subresourceRange.baseArrayLayer = 0;
+        img_barrier.subresourceRange.layerCount = 1;
+        img_barrier.subresourceRange.baseMipLevel = 0;
+        img_barrier.subresourceRange.levelCount = mip_levels;
+        img_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+        vkCmdPipelineBarrier(cmd_buffer[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &img_barrier);
+    }
 
     vkEndCommandBuffer(cmd_buffer[0]);
 
@@ -1100,558 +1211,904 @@ ERROR_TYPE load_image2D(const char* path, vk_utils::vma_image_handler& image, vk
 }
 
 
-int32_t init_pipeline(const hello_triangle_app* app)
+enum render_technique_type
 {
-    static VkShaderStageFlagBits shader_stages[std::size(shaders_paths_glsl)];
-    static VkPipelineShaderStageCreateInfo
-        shader_stages_infos[std::size(shaders_paths_glsl)];
+    BLINN_PHONG,
+    PBR
+};
+
+enum blinn_phong_textures
+{
+    BLINN_PHONG_DIFFUSE,
+    BLINN_PHONG_AMBIENT,
+    BLINN_PHONG_SPECULAR,
+    BLINN_PHONG_SPECULAR_HIGHLIGHT,
+    BLINN_PHONG_BUMP,
+    BLINN_PHONG_DISPLACEMENT,
+    BLINN_PHONG_ALPHA,
+    BLINN_PHONG_REFLECTION,
+    BLINN_PHONG_SIZE,
+};
 
 
-    static bool shaders_loaded = false;
+struct blinn_phong_material
+{
+    std::array<int32_t, BLINN_PHONG_SIZE> material_textures{-1, -1, -1, -1, -1, -1, -1, -1};
+    std::array<glm::vec3, BLINN_PHONG_SIZE> material_coeffs{};
+};
 
-    if (!shaders_loaded) {
-        for (int i = 0; i < std::size(shaders_paths_glsl); ++i) {
-            if (auto err = load_shader(shaders_paths_spv[i], vk_utils::context::get().device(), g_shader_modules[i], shader_stages[i]);
-                err != VK_SUCCESS) {
-                return err;
-            }
+struct pbr_material
+{
+};
 
-            shader_stages_infos[i].sType =
-                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            shader_stages_infos[i].pNext = nullptr;
-            shader_stages_infos[i].flags = 0;
-            shader_stages_infos[i].stage = shader_stages[i];
-            shader_stages_infos[i].module = g_shader_modules[i];
-            shader_stages_infos[i].pName = "main";
-            shader_stages_infos[i].pSpecializationInfo = nullptr;
+
+struct bound
+{
+    glm::vec3 lo;
+    glm::vec3 hi;
+};
+
+struct subgeometry
+{
+    std::vector<VkFormat> format{};
+    uint32_t indices_offset{0};
+    uint32_t indices_size{0};
+    uint32_t indices_bias{0};
+    uint32_t vertices_offset{0};
+    uint32_t image_samplers_count;
+    render_technique_type render_technique;
+    std::variant<blinn_phong_material, pbr_material> material;
+};
+
+
+struct obj_model
+{
+    vk_utils::vma_buffer_handler vertex_buffer;
+    vk_utils::vma_buffer_handler index_buffer;
+
+    std::vector<vk_utils::vma_image_handler> tex_images;
+    std::vector<vk_utils::image_view_handler> tex_image_views;
+    std::vector<vk_utils::sampler_handler> tex_samplers;
+
+    std::vector<subgeometry> subgeometries;
+
+    bound model_bound;
+};
+
+
+struct shader
+{
+    std::vector<VkShaderModule> modules;
+    std::vector<VkShaderStageFlagBits> stages;
+    std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
+    std::vector<vk_utils::descriptor_set_handler> descriptor_sets;
+};
+
+
+struct shader_group
+{
+    std::vector<vk_utils::shader_module_handler> shader_modules;
+    vk_utils::descriptor_pool_handler desc_pool;
+    std::vector<vk_utils::descriptor_set_layout_handler> shaders_layouts;
+    std::vector<shader> shaders;
+};
+
+
+ERROR_TYPE init_geom_pipelines(
+    const std::vector<subgeometry>& subgeoms,
+    const std::vector<shader>& shaders,
+    VkRenderPass pass,
+    uint32_t subpass_index,
+    VkPrimitiveTopology topo,
+    VkExtent2D input_viewport,
+    std::vector<vk_utils::graphics_pipeline_handler>& pipelines,
+    std::vector<vk_utils::pipeline_layout_handler>& pipeline_layouts)
+{
+    for (int i = 0; i < subgeoms.size(); ++i) {
+        const auto& subgeom = subgeoms[i];
+        const auto& shader = shaders[i];
+
+        std::vector<VkPipelineShaderStageCreateInfo> shader_stages{};
+        shader_stages.reserve(shader.stages.size());
+
+        if (shader.stages.size() != shader.modules.size()) {
+            RAISE_ERROR_FATAL(-1, "invalid shader modules count");
         }
 
-        shaders_loaded = true;
-    }
+        for (size_t ii = 0; ii < shader.stages.size(); ++ii) {
+            auto& stage = shader_stages.emplace_back();
+            stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stage.pNext = nullptr;
+            stage.flags = 0;
+            stage.module = shader.modules[ii];
+            stage.stage = shader.stages[ii];
+            stage.pName = "main";
+        }
 
-    static bool vert_buffer_initialized = false;
-
-    if (!vert_buffer_initialized) {
-        PASS_ERROR(create_buffer(g_vertex_buffer, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, sizeof(vert_data)));
-        PASS_ERROR(create_buffer(g_vertex_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(vert_data), vert_data));
-        PASS_ERROR(create_buffer(g_index_buffer, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, sizeof(indices)));
-        PASS_ERROR(create_buffer(g_index_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(indices), indices));
-
-        vert_buffer_initialized = true;
-    }
-
-    VkVertexInputAttributeDescription attrs[] = {
-        {.location = 0,
-         .binding = 0,
-         .format = VK_FORMAT_R32G32B32_SFLOAT,
-         .offset = 0},
-        {.location = 1,
-         .binding = 0,
-         .format = VK_FORMAT_R32G32B32_SFLOAT,
-         .offset = sizeof(float[3])},
-        {.location = 2,
-         .binding = 0,
-         .format = VK_FORMAT_R32G32B32_SFLOAT,
-         .offset = sizeof(float[3]) * 2}};
-
-    VkVertexInputBindingDescription vert_bind[] = {
+        VkVertexInputAttributeDescription vert_attrs[3] =
         {
-            .binding = 0,
-            .stride = sizeof(float[3]) * 3,
-            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-        }};
-
-    VkPipelineVertexInputStateCreateInfo vert_input_info{};
-    vert_input_info.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vert_input_info.pNext = nullptr;
-    vert_input_info.pVertexAttributeDescriptions = nullptr;
-    vert_input_info.vertexAttributeDescriptionCount = 0;
-
-    vert_input_info.pVertexAttributeDescriptions = attrs;
-    vert_input_info.vertexAttributeDescriptionCount = std::size(attrs);
-
-    vert_input_info.pVertexBindingDescriptions = nullptr;
-    vert_input_info.vertexBindingDescriptionCount = 0;
-
-    vert_input_info.pVertexBindingDescriptions = vert_bind;
-    vert_input_info.vertexBindingDescriptionCount = std::size(vert_bind);
-
-
-    VkPipelineInputAssemblyStateCreateInfo input_assembly_info{};
-    input_assembly_info.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    input_assembly_info.pNext = nullptr;
-    input_assembly_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    input_assembly_info.primitiveRestartEnable = VK_FALSE;
-
-    VkViewport viewport{};
-    viewport.x = 0, viewport.y = 0;
-    viewport.width = app->get_window_size().width;
-    viewport.height = app->get_window_size().height;
-    viewport.minDepth = 0;
-    viewport.maxDepth = 1;
-
-    VkRect2D scissor{};
-    scissor.extent = app->get_window_size();
-    scissor.offset = {0, 0};
-
-    VkPipelineViewportStateCreateInfo viewport_state{};
-    viewport_state.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewport_state.pNext = nullptr;
-    viewport_state.pViewports = &viewport;
-    viewport_state.viewportCount = 1;
-    viewport_state.pScissors = &scissor;
-    viewport_state.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterization_info{};
-    rasterization_info.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterization_info.pNext = nullptr;
-    rasterization_info.depthClampEnable = VK_FALSE;
-    rasterization_info.depthBiasEnable = VK_FALSE;
-    rasterization_info.rasterizerDiscardEnable = VK_FALSE;
-
-    rasterization_info.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterization_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterization_info.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization_info.lineWidth = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo multisample_info{};
-    multisample_info.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisample_info.pNext = nullptr;
-    multisample_info.alphaToCoverageEnable = VK_FALSE;
-    multisample_info.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    multisample_info.sampleShadingEnable = VK_FALSE;
-    multisample_info.alphaToOneEnable = VK_FALSE;
-    multisample_info.minSampleShading = 1.0f;
-    multisample_info.pSampleMask = nullptr;
-
-    VkPipelineColorBlendStateCreateInfo color_blend_info{};
-    color_blend_info.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    color_blend_info.pNext = nullptr;
-    VkPipelineColorBlendAttachmentState color_blend_attachment{};
-    color_blend_attachment.blendEnable = VK_FALSE;
-    color_blend_attachment.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    color_blend_info.pAttachments = &color_blend_attachment;
-    color_blend_info.attachmentCount = 1;
-    color_blend_info.logicOpEnable = VK_FALSE;
-
-    VkDynamicState dyn_state[] = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR,
-    };
-    VkPipelineDynamicStateCreateInfo dyn_state_info{};
-    dyn_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dyn_state_info.pNext = nullptr;
-    dyn_state_info.pDynamicStates = dyn_state;
-    dyn_state_info.dynamicStateCount = std::size(dyn_state);
-
-    static bool pipeline_layout_created = false;
-
-    if (!pipeline_layout_created) {
-        VkDescriptorSetLayoutBinding descriptor_set_layout_binding[] = {
             {
+                .location = 0,
                 .binding = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-                .pImmutableSamplers = nullptr,
+                .format = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = 0,
             },
             {
+                .location = 1,
                 .binding = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                .pImmutableSamplers = nullptr,
-            }};
+                .format = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = 0,
+            },
+            {
+                .location = 2,
+                .binding = 0,
+                .format = VK_FORMAT_R32G32_SFLOAT,
+                .offset = 0,
+            }
+        };
+        if (subgeom.format.size() > std::size(vert_attrs)) {
+            RAISE_ERROR_FATAL(-1, "invalid vertex format");
+        }
+        uint32_t stride = 0;
+        for (int i = 0; i < subgeom.format.size(); ++i) {
+            vert_attrs[i].binding = 0;
+            vert_attrs[i].location = i;
+            vert_attrs[i].format = subgeom.format[i];
+            vert_attrs[i].offset = stride;
 
-        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_info{};
-        descriptor_set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        descriptor_set_layout_info.pNext = nullptr;
-        descriptor_set_layout_info.pBindings = &descriptor_set_layout_binding[0];
-        descriptor_set_layout_info.bindingCount = 1;
-
-        if (auto err_code = g_ubo_descriptor_set_layout.init(vk_utils::context::get().device(), &descriptor_set_layout_info); err_code != VK_SUCCESS) {
-            return -1;
+            switch (subgeom.format[i]) {
+                case VK_FORMAT_R32G32B32_SFLOAT:
+                    stride += sizeof(float) * 3;
+                    break;
+                case VK_FORMAT_R32G32_SFLOAT:
+                    stride += sizeof(float) * 2;
+                    break;
+                default:
+                    RAISE_ERROR_FATAL(-1, "invalid vertex attribute format");
+            }
         }
 
-        descriptor_set_layout_info.pBindings = &descriptor_set_layout_binding[1];
+        VkVertexInputBindingDescription vert_binding{};
+        vert_binding.binding = 0;
+        vert_binding.stride = stride;
+        vert_binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        if (auto err_code = g_texture_descriptor_set_layout.init(vk_utils::context::get().device(), &descriptor_set_layout_info); err_code != VK_SUCCESS) {
-            return -1;
+        VkPipelineVertexInputStateCreateInfo vert_input_info{};
+        vert_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vert_input_info.pNext = nullptr;
+        vert_input_info.flags = 0;
+        vert_input_info.pVertexAttributeDescriptions = vert_attrs;
+        vert_input_info.vertexAttributeDescriptionCount = std::size(vert_attrs);
+        vert_input_info.pVertexBindingDescriptions = &vert_binding;
+        vert_input_info.vertexBindingDescriptionCount = 1;
+
+        VkPipelineInputAssemblyStateCreateInfo input_assembly_info{};
+        input_assembly_info.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        input_assembly_info.pNext = nullptr;
+        input_assembly_info.flags = 0;
+        input_assembly_info.primitiveRestartEnable = VK_FALSE;
+        input_assembly_info.topology = topo;
+
+        VkRect2D scissor;
+        scissor.offset.x = 0;
+        scissor.offset.y = 0;
+        scissor.extent = input_viewport;
+
+        VkViewport viewport;
+        viewport.width = input_viewport.width;
+        viewport.height = input_viewport.height;
+        viewport.x = 0;
+        viewport.y = 0;
+        viewport.minDepth = 0;
+        viewport.maxDepth = 1;
+
+        VkPipelineViewportStateCreateInfo viewport_info{};
+        viewport_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewport_info.pNext = nullptr;
+        viewport_info.flags = 0;
+
+        viewport_info.pScissors = &scissor;
+        viewport_info.scissorCount = 1;
+        viewport_info.pViewports = &viewport;
+        viewport_info.viewportCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rasterization_info{};
+        rasterization_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterization_info.pNext = nullptr;
+        rasterization_info.flags = 0;
+        rasterization_info.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterization_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterization_info.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterization_info.lineWidth = 1;
+        rasterization_info.depthClampEnable = VK_FALSE;
+        rasterization_info.depthBiasEnable = VK_FALSE;
+        rasterization_info.rasterizerDiscardEnable = VK_FALSE;
+
+        VkPipelineMultisampleStateCreateInfo multisample_info{};
+        multisample_info.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisample_info.pNext = nullptr;
+        multisample_info.flags = 0;
+        multisample_info.alphaToCoverageEnable = VK_FALSE;
+        multisample_info.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        multisample_info.sampleShadingEnable = VK_FALSE;
+        multisample_info.alphaToOneEnable = VK_FALSE;
+        multisample_info.minSampleShading = 1.0f;
+        multisample_info.pSampleMask = nullptr;
+
+        VkPipelineDepthStencilStateCreateInfo depth_stencil_info{};
+        depth_stencil_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depth_stencil_info.pNext = nullptr;
+        depth_stencil_info.flags = 0;
+        depth_stencil_info.depthTestEnable = VK_TRUE;
+        depth_stencil_info.depthWriteEnable = VK_TRUE;
+        depth_stencil_info.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+        depth_stencil_info.stencilTestEnable = VK_FALSE;
+        depth_stencil_info.depthBoundsTestEnable = VK_FALSE;
+
+        VkPipelineColorBlendAttachmentState color_blend_attachment{};
+        color_blend_attachment.blendEnable = VK_FALSE;
+        color_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+        VkPipelineColorBlendStateCreateInfo color_blend_info{};
+        color_blend_info.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        color_blend_info.pNext = nullptr;
+        color_blend_info.flags = 0;
+        color_blend_info.pAttachments = &color_blend_attachment;
+        color_blend_info.attachmentCount = 1;
+        color_blend_info.logicOpEnable = VK_FALSE;
+
+        VkPipelineLayoutCreateInfo pipeline_layout_info{};
+        pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipeline_layout_info.pNext = nullptr;
+        pipeline_layout_info.flags = 0;
+
+        std::vector<VkDescriptorSetLayout> desc_set_layouts;
+        std::transform(shader.descriptor_set_layouts.begin(), shader.descriptor_set_layouts.end(), std::back_inserter(desc_set_layouts), [](VkDescriptorSetLayout l) {return  l;});
+
+        pipeline_layout_info.pSetLayouts = desc_set_layouts.data();
+        pipeline_layout_info.setLayoutCount = desc_set_layouts.size();
+        pipeline_layout_info.pushConstantRangeCount = 0;
+        pipeline_layout_info.pPushConstantRanges = nullptr;
+
+        auto& pipeline_layout = pipeline_layouts.emplace_back();
+        pipeline_layout.init(vk_utils::context::get().device(), &pipeline_layout_info);
+
+        VkGraphicsPipelineCreateInfo pipeline_create_info{};
+        pipeline_create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipeline_create_info.pNext = nullptr;
+        pipeline_create_info.flags = 0;
+
+        pipeline_create_info.pStages = shader_stages.data();
+        pipeline_create_info.stageCount = shader_stages.size();
+        pipeline_create_info.pVertexInputState = &vert_input_info;
+        pipeline_create_info.pInputAssemblyState = &input_assembly_info;
+        pipeline_create_info.pTessellationState = nullptr;
+        pipeline_create_info.pViewportState = &viewport_info;
+        pipeline_create_info.pRasterizationState = &rasterization_info;
+        pipeline_create_info.pMultisampleState = &multisample_info;
+        pipeline_create_info.pDepthStencilState = &depth_stencil_info;
+        pipeline_create_info.pColorBlendState = &color_blend_info;
+        pipeline_create_info.pDynamicState = nullptr;
+        pipeline_create_info.layout = pipeline_layout;
+
+        pipeline_create_info.renderPass = pass;
+        pipeline_create_info.subpass = subpass_index;
+        pipeline_create_info.basePipelineHandle = nullptr;
+        pipeline_create_info.basePipelineIndex = -1;
+
+        auto& pipeline = pipelines.emplace_back();
+        if (pipeline.init(vk_utils::context::get().device(), &pipeline_create_info) != VK_SUCCESS) {
+            RAISE_ERROR_FATAL(-1, "cannot init pipeline.");
         }
-
-        VkDescriptorSetLayout desc_set_layouts[]{g_ubo_descriptor_set_layout, g_texture_descriptor_set_layout};
-
-        VkPipelineLayoutCreateInfo layout_create_info{};
-        layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout_create_info.pNext = nullptr;
-        layout_create_info.pPushConstantRanges = nullptr;
-        layout_create_info.pushConstantRangeCount = 0;
-        layout_create_info.pSetLayouts = desc_set_layouts;
-        layout_create_info.setLayoutCount = std::size(desc_set_layouts);
-
-        if (auto err_code =
-                g_pipeline_layout.init(vk_utils::context::get().device(), &layout_create_info);
-            err_code != VK_SUCCESS) {
-            return -1;
-        }
-
-        pipeline_layout_created = true;
     }
+}
 
-    VkGraphicsPipelineCreateInfo pipeline_create_info{};
-    pipeline_create_info.sType =
-        VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipeline_create_info.pNext = nullptr;
+ERROR_TYPE init_obj_geometry(
+    const tinyobj::attrib_t& attrib,
+    const std::vector<tinyobj::shape_t>& shapes,
+    const vk_utils::cmd_pool_handler& cmd_pool,
+    vk_utils::vma_buffer_handler& v_buffer,
+    vk_utils::vma_buffer_handler& i_buffer,
+    std::vector<subgeometry>& subgeoms,
+    bound& model_bound)
+{
+    model_bound.lo = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+    model_bound.hi = {std::numeric_limits<float>::min(), std::numeric_limits<float>::min(), std::numeric_limits<float>::min()};
 
-    VkPipelineDepthStencilStateCreateInfo depth_stencil_info{};
-    depth_stencil_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depth_stencil_info.pNext = nullptr;
-    depth_stencil_info.flags = 0;
-    depth_stencil_info.depthTestEnable = VK_TRUE;
-    depth_stencil_info.depthWriteEnable = VK_TRUE;
-    depth_stencil_info.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-    depth_stencil_info.stencilTestEnable = VK_FALSE;
-    depth_stencil_info.depthBoundsTestEnable = VK_FALSE;
-
-    pipeline_create_info.pStages = shader_stages_infos;
-    pipeline_create_info.stageCount = std::size(shaders_paths_glsl);
-    pipeline_create_info.pVertexInputState = &vert_input_info;
-    pipeline_create_info.pInputAssemblyState = &input_assembly_info;
-    pipeline_create_info.pViewportState = &viewport_state;
-    pipeline_create_info.pRasterizationState = &rasterization_info;
-    pipeline_create_info.pMultisampleState = &multisample_info;
-    pipeline_create_info.pDepthStencilState = &depth_stencil_info;
-    pipeline_create_info.pColorBlendState = &color_blend_info;
-    pipeline_create_info.pDynamicState = nullptr;
-    pipeline_create_info.layout = g_pipeline_layout;
-    pipeline_create_info.renderPass = app->get_main_pass();
-    pipeline_create_info.subpass = 0;
-    pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
-    pipeline_create_info.basePipelineIndex = -1;
-
-    if (const auto err_code =
-            g_pipeline.init(vk_utils::context::get().device(), &pipeline_create_info);
-        err_code != VK_SUCCESS) {
-        return -1;
-    }
-
-    auto fbs = app->get_main_framebuffers();
-
-    static bool cmd_pool_created = false;
-
-    if (!cmd_pool_created) {
-        VkCommandPoolCreateInfo cmd_pool_create_info{};
-        cmd_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        cmd_pool_create_info.pNext = nullptr;
-        cmd_pool_create_info.queueFamilyIndex = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
-        if (const auto err_code = g_cmd_pool.init(vk_utils::context::get().device(), &cmd_pool_create_info);
-            err_code != VK_SUCCESS) {
-            return err_code;
-        }
-
-        cmd_pool_created = true;
-    }
-
-    static bool image_loaded = false;
-
-    if (!image_loaded) {
-        PASS_ERROR(load_image2D("./images/texture.jpg", g_shader_image, g_shader_img_view, g_shader_sampler));
-        image_loaded = true;
-    }
-
-    VkCommandBufferAllocateInfo cmd_buff_alloc_info{};
-    cmd_buff_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cmd_buff_alloc_info.pNext = nullptr;
-    cmd_buff_alloc_info.commandBufferCount = fbs.size();
-    cmd_buff_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cmd_buff_alloc_info.commandPool = g_cmd_pool;
-
-    if (const auto err_code = g_draw_cmd_buffers.init(vk_utils::context::get().device(), g_cmd_pool, &cmd_buff_alloc_info, cmd_buff_alloc_info.commandBufferCount); err_code != VK_SUCCESS) {
-        return -1;
-    }
-
-    static bool vert_buffer_copied = false;
-
-    if (!vert_buffer_copied) {
-        cmd_buff_alloc_info.commandBufferCount = 1;
-
-        if (const auto err_code = g_data_copy_cmd_buffers.init(vk_utils::context::get().device(), g_cmd_pool, &cmd_buff_alloc_info, cmd_buff_alloc_info.commandBufferCount); err_code != VK_SUCCESS) {
-            return -1;
-        }
-
-        VkCommandBufferBeginInfo data_copy_begin_info{};
-        data_copy_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        data_copy_begin_info.pNext = nullptr;
-        data_copy_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        data_copy_begin_info.pInheritanceInfo = nullptr;
-
-        vkBeginCommandBuffer(g_data_copy_cmd_buffers[0], &data_copy_begin_info);
-        VkBufferCopy copy_info{};
-        copy_info.size = sizeof(vert_data);
-        copy_info.srcOffset = 0;
-        copy_info.dstOffset = 0;
-        vkCmdCopyBuffer(g_data_copy_cmd_buffers[0], g_vertex_staging_buffer, g_vertex_buffer, 1, &copy_info);
-        copy_info.size = sizeof(indices);
-        vkCmdCopyBuffer(g_data_copy_cmd_buffers[0], g_index_staging_buffer, g_index_buffer, 1, &copy_info);
-
-        VkBufferMemoryBarrier buffers_mem_barrier[2];
-
-        buffers_mem_barrier[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        buffers_mem_barrier[0].pNext = nullptr;
-        buffers_mem_barrier[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        buffers_mem_barrier[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        buffers_mem_barrier[0].size =  sizeof(vert_data);
-        buffers_mem_barrier[0].offset = 0;
-        buffers_mem_barrier[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        buffers_mem_barrier[0].dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-        buffers_mem_barrier[0].buffer = g_vertex_buffer;
-
-        buffers_mem_barrier[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        buffers_mem_barrier[1].pNext = nullptr;
-        buffers_mem_barrier[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        buffers_mem_barrier[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        buffers_mem_barrier[1].size =  sizeof(indices);
-        buffers_mem_barrier[1].offset = 0;
-        buffers_mem_barrier[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        buffers_mem_barrier[1].dstAccessMask = VK_ACCESS_INDEX_READ_BIT;
-        buffers_mem_barrier[1].buffer = g_index_buffer;
-
-        vkCmdPipelineBarrier(g_data_copy_cmd_buffers[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, nullptr, std::size(buffers_mem_barrier), buffers_mem_barrier, 0, nullptr);
-
-        vkEndCommandBuffer(g_data_copy_cmd_buffers[0]);
-
-        vert_buffer_copied = true;
-    }
-
-
-    static bool ubos_created = false;
-
-    if (!ubos_created) {
-        create_buffer(g_global_uniform_buffer, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo));
-        ubos_created = true;
-    }
-
-    static bool descriptors_sets_created = false;
-
-    if (!descriptors_sets_created) {
-        VkDescriptorPoolCreateInfo descriptor_pool_info{};
-        descriptor_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        descriptor_pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        descriptor_pool_info.pNext = nullptr;
-
-        VkDescriptorPoolSize pools_size[] = {
-            {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-             .descriptorCount = static_cast<uint32_t>(fbs.size())},
-            {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-             .descriptorCount = static_cast<uint32_t>(fbs.size())}};
-
-        descriptor_pool_info.pPoolSizes = pools_size;
-        descriptor_pool_info.poolSizeCount = std::size(pools_size);
-        descriptor_pool_info.maxSets = fbs.size() * 2;
-
-        if (const auto err_code = g_descriptor_pool.init(vk_utils::context::get().device(), &descriptor_pool_info); err_code != VK_SUCCESS) {
-            return -1;
-        }
-
-        std::vector<VkDescriptorSetLayout> ubo_desc_layouts{fbs.size(), g_ubo_descriptor_set_layout};
-        std::vector<VkDescriptorSetLayout> texture_desc_layouts{fbs.size(), g_texture_descriptor_set_layout};
-
-        VkDescriptorSetAllocateInfo descriptor_alloc_info{};
-        descriptor_alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        descriptor_alloc_info.pNext = nullptr;
-        descriptor_alloc_info.pSetLayouts = ubo_desc_layouts.data();
-        descriptor_alloc_info.descriptorSetCount = fbs.size();
-        descriptor_alloc_info.descriptorPool = g_descriptor_pool;
-
-        if (const auto err_code = g_ubo_descriptor_sets.init(vk_utils::context::get().device(), g_descriptor_pool, &descriptor_alloc_info, descriptor_alloc_info.descriptorSetCount); err_code != VK_SUCCESS) {
-            return -1;
-        }
-
-        descriptor_alloc_info.pSetLayouts = texture_desc_layouts.data();
-
-        if (const auto err_code = g_texture_descriptor_sets.init(vk_utils::context::get().device(), g_descriptor_pool, &descriptor_alloc_info, descriptor_alloc_info.descriptorSetCount); err_code != VK_SUCCESS) {
-            return -1;
-        }
-
-        VkWriteDescriptorSet ubo_write_desc_set{};
-        ubo_write_desc_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        ubo_write_desc_set.pNext = nullptr;
-        ubo_write_desc_set.dstBinding = 0;
-        ubo_write_desc_set.descriptorCount = 1;
-        ubo_write_desc_set.dstArrayElement = 0;
-        ubo_write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-
-        VkWriteDescriptorSet tex_write_desc_set{};
-        tex_write_desc_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        tex_write_desc_set.pNext = nullptr;
-        tex_write_desc_set.dstBinding = 0;
-        tex_write_desc_set.descriptorCount = 1;
-        tex_write_desc_set.dstArrayElement = 0;
-        tex_write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        VkDescriptorImageInfo tex_write_desc_set_img_info{};
-        tex_write_desc_set_img_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        tex_write_desc_set_img_info.imageView = g_shader_img_view;
-        tex_write_desc_set_img_info.sampler = g_shader_sampler;
-
-        tex_write_desc_set.pImageInfo = &tex_write_desc_set_img_info;
-
-        for (int i = 0; i < fbs.size(); ++i) {
-            ubo_write_desc_set.dstSet = g_ubo_descriptor_sets[i];
-            tex_write_desc_set.dstSet = g_texture_descriptor_sets[i];
-            VkDescriptorBufferInfo buffer_info{};
-
-            buffer_info.buffer = g_global_uniform_buffer;
-            buffer_info.offset = 0;
-            buffer_info.range = VK_WHOLE_SIZE;
-            ubo_write_desc_set.pBufferInfo = &buffer_info;
-
-            vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &ubo_write_desc_set, 0, nullptr);
-            vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &tex_write_desc_set, 0, nullptr);
-        }
-
-        descriptors_sets_created = true;
-    }
-
-    const VkCommandBuffer* cmd_buffers = g_draw_cmd_buffers;
-
-    VkCommandBufferBeginInfo cmd_buf_begin_info{};
-    cmd_buf_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    cmd_buf_begin_info.pNext = nullptr;
-    cmd_buf_begin_info.pInheritanceInfo = nullptr;
-
-    VkRenderPassBeginInfo pass_begin_info{};
-    pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    pass_begin_info.pNext = nullptr;
-    pass_begin_info.renderPass = app->get_main_pass();
-    pass_begin_info.renderArea = {
-        .offset = {0, 0},
-        .extent = app->get_window_size()};
-
-    VkClearValue clears[]
+    struct vertex
     {
+        std::array<float, 3> position;
+        std::optional<std::array<float, 3>> normal;
+        std::optional<std::array<float, 3>> texcoord;
+    };
+
+    struct geometry
+    {
+        std::vector<vertex> vertices;
+        std::vector<uint32_t> indices;
+        std::vector<VkFormat> vertex_format;
+        size_t vertex_size = 0;
+    };
+
+    std::vector<geometry> geometries;
+    geometries.reserve(shapes.size());
+
+    auto vert_eq = [](const vertex& v1) {
+        return [&v1](const vertex& v2) {
+            if (v1.position != v2.position) {
+                return false;
+            }
+            if (v1.normal && v2.normal && (*v1.normal != *v2.normal)) {
+                return false;
+            }
+            if (v1.texcoord && v2.texcoord && (*v1.texcoord != *v2.texcoord)) {
+                return false;
+            }
+            return true;
+        };
+    };
+
+    for (const auto& shape : shapes) {
+        auto& g = geometries.emplace_back();
+        g.vertices.reserve(shape.mesh.indices.size());
+        auto& i = shape.mesh.indices.front();
+
+        g.vertex_format.emplace_back(VK_FORMAT_R32G32B32_SFLOAT);
+        g.vertex_size += sizeof(glm::vec3);
+
+        if (i.normal_index >= 0) {
+            g.vertex_format.emplace_back(VK_FORMAT_R32G32B32_SFLOAT);
+            g.vertex_size += sizeof(glm::vec3);
+        }
+
+        if (i.texcoord_index >= 0) {
+            g.vertex_format.emplace_back(VK_FORMAT_R32G32_SFLOAT);
+            g.vertex_size += sizeof(glm::vec2);
+        }
+
+        for (auto& i : shape.mesh.indices) {
+            vertex v{};
+
+            v.position[0] = attrib.vertices[3 * i.vertex_index];
+            v.position[1] = attrib.vertices[3 * i.vertex_index + 1];
+            v.position[2] = attrib.vertices[3 * i.vertex_index + 2];
+
+            if (i.normal_index >= 0) {
+                v.normal = {attrib.normals[3 * i.normal_index], attrib.vertices[3 * i.normal_index + 1], attrib.vertices[3 * i.normal_index + 2]};
+            }
+
+            if (i.texcoord_index >= 0) {
+                v.texcoord = {attrib.texcoords[2 * i.texcoord_index], attrib.texcoords[2 * i.texcoord_index + 1]};
+            }
+
+            auto vertex_exist = std::find_if(g.vertices.begin(), g.vertices.end(), vert_eq(v));
+
+            if (vertex_exist != g.vertices.end()) {
+                g.indices.emplace_back(std::distance(g.vertices.begin(), vertex_exist));
+            } else {
+                g.indices.emplace_back(g.vertices.size());
+                g.vertices.emplace_back(v);
+
+                model_bound.lo.x = std::min(v.position[0], model_bound.lo.x);
+                model_bound.lo.y = std::min(v.position[1], model_bound.lo.y);
+                model_bound.lo.z = std::min(v.position[2], model_bound.lo.z);
+
+                model_bound.hi.x = std::max(v.position[0], model_bound.hi.x);
+                model_bound.hi.y = std::max(v.position[1], model_bound.hi.y);
+                model_bound.hi.z = std::max(v.position[2], model_bound.hi.z);
+            }
+        }
+    }
+    size_t vert_values_count = 0;
+    size_t indices_count = 0;
+
+    std::vector<float> vert_buffer_data;
+    std::vector<uint32_t> index_buffer_data;
+
+    for (auto& g : geometries) {
+        size_t vertex_floats_count = 3;
+
+        if (g.vertices.front().normal) {
+            vertex_floats_count += 3;
+        }
+
+        if (g.vertices.front().texcoord) {
+            vertex_floats_count += 2;
+        }
+
+        vert_values_count += vertex_floats_count * g.vertices.size();
+        indices_count += g.indices.size();
+    }
+
+    vert_buffer_data.reserve(vert_values_count);
+    index_buffer_data.reserve(indices_count);
+    uint32_t start_vertex = 0;
+    size_t indices_offset = 0;
+    size_t vertices_offset = 0;
+
+    subgeoms.reserve(geometries.size());
+
+    for (auto& g : geometries) {
+        auto& sg = subgeoms.emplace_back();
+        sg.format = g.vertex_format;
+        sg.indices_offset = indices_offset;
+        sg.vertices_offset = vertices_offset;
+        sg.indices_bias = start_vertex;
+        sg.indices_size = g.indices.size();
+
+        for (const auto& v : g.vertices) {
+            vert_buffer_data.push_back(v.position[0]);
+            vert_buffer_data.push_back(v.position[1]);
+            vert_buffer_data.push_back(v.position[2]);
+
+            if (v.normal) {
+                vert_buffer_data.push_back(v.normal->at(0));
+                vert_buffer_data.push_back(v.normal->at(1));
+                vert_buffer_data.push_back(v.normal->at(2));
+            }
+
+            if (v.texcoord) {
+                vert_buffer_data.push_back(v.texcoord->at(0));
+                vert_buffer_data.push_back(v.texcoord->at(1));
+            }
+        }
+
+        for (const uint32_t index : g.indices) {
+            index_buffer_data.push_back(index);
+        }
+
+        start_vertex += g.vertices.size();
+        vertices_offset += g.vertices.size() * g.vertex_size;
+        indices_offset += g.indices.size();
+    }
+
+    vk_utils::vma_buffer_handler vert_staging_buffer{};
+    create_buffer(vert_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, vert_buffer_data.size() * sizeof(float), vert_buffer_data.data());
+    vk_utils::vma_buffer_handler index_staging_buffer{};
+    create_buffer(index_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, index_buffer_data.size() * sizeof(uint32_t), index_buffer_data.data());
+
+    create_buffer(v_buffer, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, vert_buffer_data.size() * sizeof(float));
+    create_buffer(i_buffer, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, index_buffer_data.size() * sizeof(uint32_t));
+
+    vk_utils::cmd_buffers_handler cmd_buffer{};
+    VkCommandBufferAllocateInfo cmd_buffer_alloc_info{};
+    cmd_buffer_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cmd_buffer_alloc_info.pNext = nullptr;
+    cmd_buffer_alloc_info.commandPool = cmd_pool;
+    cmd_buffer_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmd_buffer_alloc_info.commandBufferCount = 1;
+    cmd_buffer.init(vk_utils::context::get().device(), cmd_pool, &cmd_buffer_alloc_info, 1);
+
+    VkCommandBufferBeginInfo cmd_buffer_begin_info{};
+    cmd_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cmd_buffer_begin_info.pNext = nullptr;
+    cmd_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    cmd_buffer_begin_info.pInheritanceInfo = nullptr;
+
+    vkBeginCommandBuffer(cmd_buffer[0], &cmd_buffer_begin_info);
+
+    VkBufferCopy vert_region{};
+    vert_region.srcOffset = 0;
+    vert_region.dstOffset = 0;
+    vert_region.size = vert_buffer_data.size() * sizeof(float);
+    vkCmdCopyBuffer(cmd_buffer[0], vert_staging_buffer, v_buffer, 1, &vert_region);
+
+    VkBufferCopy index_region{};
+    index_region.srcOffset = 0;
+    index_region.dstOffset = 0;
+    index_region.size = index_buffer_data.size() * sizeof(uint32_t);
+    vkCmdCopyBuffer(cmd_buffer[0], index_staging_buffer, i_buffer, 1, &index_region);
+
+    vkEndCommandBuffer(cmd_buffer[0]);
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = nullptr;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = cmd_buffer;
+
+    vkQueueSubmit(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), 1, &submit_info, nullptr);
+    vkQueueWaitIdle(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS));
+
+    RAISE_ERROR_OK();
+}
+
+
+ERROR_TYPE init_obj_materials(
+    const std::vector<tinyobj::shape_t>& shapes,
+    const vk_utils::cmd_pool_handler& cmd_pool,
+    const std::vector<tinyobj::material_t>& materials, obj_model& model,
+    const char** textures,
+    size_t textures_size)
+{
+    std::vector<std::string> load_textures;
+
+    for (int i = 0; i < textures_size; ++i) {
+        load_textures.emplace_back(textures[i]);
+    }
+
+    for (size_t i = 0; i < shapes.size(); ++i) {
+        auto& shape = shapes[i];
+        auto& mat = materials[shape.mesh.material_ids.front()];
+
+        auto& m = model.subgeometries[i].material.emplace<blinn_phong_material>();
+
+        int curr_diff_texture_index = 0;
+
+        if (textures_size == 0) {
+            if (!mat.diffuse_texname.empty()) {
+                auto tex_it = std::find(load_textures.begin(), load_textures.end(), mat.diffuse_texname);
+                if (tex_it == load_textures.end()) {
+                    m.material_textures[BLINN_PHONG_DIFFUSE] = load_textures.size();
+                    load_textures.emplace_back(mat.diffuse_texname);
+                } else {
+                    m.material_textures[BLINN_PHONG_DIFFUSE] = std::distance(load_textures.begin(), tex_it);
+                }
+            }
+        } else {
+            m.material_textures[BLINN_PHONG_DIFFUSE] = std::min(i, textures_size - 1);
+        }
+    }
+
+    model.tex_images.reserve(load_textures.size());
+    model.tex_image_views.reserve(load_textures.size());
+    model.tex_samplers.reserve(load_textures.size());
+
+    for (auto& tex : load_textures) {
+        auto& i = model.tex_images.emplace_back();
+        auto& v = model.tex_image_views.emplace_back();
+        auto& s = model.tex_samplers.emplace_back();
+
+        PASS_ERROR(load_image2D(tex.c_str(), cmd_pool, true, i, v, s));
+    }
+
+    RAISE_ERROR_OK();
+}
+
+
+ERROR_TYPE load_obj_model(const char* path, const vk_utils::cmd_pool_handler& cmd_pool, obj_model& model, const char** textures, size_t textures_size)
+{
+    tinyobj::ObjReader reader;
+
+    if (!reader.ParseFromFile(path)) {
+        RAISE_ERROR_FATAL(-1, reader.Error());
+    }
+
+    const tinyobj::attrib_t& attrib = reader.GetAttrib();
+    const std::vector<tinyobj::shape_t>& shapes = reader.GetShapes();
+    const std::vector<tinyobj::material_t>& materials = reader.GetMaterials();
+
+    if (!reader.Warning().empty()) {
+        LOG_WARN(reader.Warning());
+    }
+
+    PASS_ERROR(init_obj_geometry(attrib, shapes, cmd_pool, model.vertex_buffer, model.index_buffer, model.subgeometries, model.model_bound));
+    PASS_ERROR(init_obj_materials(shapes, cmd_pool, materials, model, textures, textures_size));
+
+    RAISE_ERROR_OK();
+}
+
+ERROR_TYPE init_dummy_shaders(const obj_model& model, const VkBuffer ubo, shader_group& sgroup)
+{
+    sgroup.shader_modules.reserve(2);
+    auto& vs = sgroup.shader_modules.emplace_back();
+    VkShaderStageFlagBits vs_stage{};
+    auto& fs = sgroup.shader_modules.emplace_back();
+    VkShaderStageFlagBits fs_stage{};
+
+    if (load_shader("./shaders/dummy.vert.glsl.spv", vk_utils::context::get().device(), vs, vs_stage) < 0) {
+        RAISE_ERROR_FATAL(-1, "cannot load shader dummy.vert.glsl.spv");
+    }
+
+    if (load_shader("./shaders/dummy.frag.glsl.spv", vk_utils::context::get().device(), fs, fs_stage) < 0) {
+        RAISE_ERROR_FATAL(-1, "cannot load shader dummy.frag.glsl.spv");
+    }
+
+    VkDescriptorSetLayoutBinding bindings[] {
         {
-            .color = {.2, .3, .7, 1.}
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        },
+        {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        }
+    };
+
+    VkDescriptorSetLayoutCreateInfo desc_set_layout_info{};
+    desc_set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    desc_set_layout_info.pNext = nullptr;
+    desc_set_layout_info.flags = 0;
+    desc_set_layout_info.bindingCount = 1;
+    desc_set_layout_info.pBindings = &bindings[0];
+
+    sgroup.shaders_layouts.reserve(2);
+    auto& ubo_set_layout = sgroup.shaders_layouts.emplace_back();
+    ubo_set_layout.init(vk_utils::context::get().device(), &desc_set_layout_info);
+
+    desc_set_layout_info.pBindings = &bindings[1];
+    auto& texture_set_layout = sgroup.shaders_layouts.emplace_back();
+    texture_set_layout.init(vk_utils::context::get().device(), &desc_set_layout_info);
+
+    VkDescriptorPoolSize descriptor_pool_sizes[] {
+        {
+            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = static_cast<uint32_t>(model.subgeometries.size()),
+        },
+        {
+            .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = static_cast<uint32_t>(model.subgeometries.size()),
+        }
+    };
+
+    VkDescriptorPoolCreateInfo desc_pool_info{};
+    desc_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    desc_pool_info.pNext = nullptr;
+    desc_pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    desc_pool_info.maxSets = model.subgeometries.size() * 2;
+    desc_pool_info.pPoolSizes = descriptor_pool_sizes;
+    desc_pool_info.poolSizeCount = std::size(descriptor_pool_sizes);
+
+    if (sgroup.desc_pool.init(vk_utils::context::get().device(), &desc_pool_info) != VK_SUCCESS) {
+        RAISE_ERROR_FATAL(-1, "cannot init desc pool.");
+    }
+
+
+    for(auto& subgeom : model.subgeometries) {
+        auto& s = sgroup.shaders.emplace_back();
+        s.modules.emplace_back(vs);
+        s.modules.emplace_back(fs);
+        s.stages.emplace_back(vs_stage);
+        s.stages.emplace_back(fs_stage);
+        s.descriptor_set_layouts.emplace_back(ubo_set_layout);
+        s.descriptor_set_layouts.emplace_back(texture_set_layout);
+
+        VkDescriptorSetAllocateInfo desc_sets_alloc_info{};
+        desc_sets_alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        desc_sets_alloc_info.pNext = nullptr;
+        desc_sets_alloc_info.descriptorPool = sgroup.desc_pool;
+        desc_sets_alloc_info.descriptorSetCount = 1;
+
+        desc_sets_alloc_info.pSetLayouts = ubo_set_layout;
+        s.descriptor_sets.reserve(2);
+        auto& ubo_desc_set = s.descriptor_sets.emplace_back();
+        ubo_desc_set.init(vk_utils::context::get().device(), sgroup.desc_pool, &desc_sets_alloc_info, desc_sets_alloc_info.descriptorSetCount);
+
+        desc_sets_alloc_info.pSetLayouts = texture_set_layout;
+        auto& tex_desc_set = s.descriptor_sets.emplace_back();
+        tex_desc_set.init(vk_utils::context::get().device(), sgroup.desc_pool, &desc_sets_alloc_info, desc_sets_alloc_info.descriptorSetCount);
+
+        VkWriteDescriptorSet write_desc_set{};
+        write_desc_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write_desc_set.pNext = nullptr;
+        write_desc_set.descriptorCount = 1;
+        write_desc_set.dstArrayElement = 0;
+        write_desc_set.dstBinding = 0;
+        write_desc_set.dstSet = ubo_desc_set[0];
+        write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        VkDescriptorBufferInfo ubo_info{};
+        ubo_info.offset = 0;
+        ubo_info.buffer = ubo;
+        ubo_info.range = VK_WHOLE_SIZE;
+        write_desc_set.pBufferInfo = &ubo_info;
+
+        vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &write_desc_set, 0, nullptr);
+        VkImageView img_view{nullptr};
+        VkSampler sampler{nullptr};
+
+        switch (subgeom.render_technique) {
+            case BLINN_PHONG:
+                {
+                    auto& m = std::get<blinn_phong_material>(subgeom.material);
+                    if (m.material_textures[BLINN_PHONG_DIFFUSE] >= 0) {
+                        img_view = model.tex_image_views[m.material_textures[BLINN_PHONG_DIFFUSE]];
+                        sampler = model.tex_samplers[m.material_textures[BLINN_PHONG_DIFFUSE]];
+                    }
+                }
+                break;
+            case PBR:
+                break;
+        }
+
+        if (img_view != nullptr) {
+            VkDescriptorImageInfo img_info{};
+            img_info.imageView = img_view;
+            img_info.sampler = sampler;
+            img_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            write_desc_set.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write_desc_set.dstSet = tex_desc_set[0];
+            write_desc_set.pBufferInfo = nullptr;
+            write_desc_set.pImageInfo = &img_info;
+            vkUpdateDescriptorSets(vk_utils::context::get().device(), 1, &write_desc_set, 0, nullptr);
+        }
+    }
+
+    RAISE_ERROR_OK();
+}
+
+ERROR_TYPE record_obj_model_dummy_draw_commands(
+    const obj_model& model,
+    const shader_group& sgroup,
+    const hello_triangle_app* app,
+    VkCommandPool cmd_pool,
+    vk_utils::cmd_buffers_handler& cmd_buffers,
+    std::vector<vk_utils::pipeline_layout_handler>& pipelines_layouts,
+    std::vector<vk_utils::graphics_pipeline_handler>& pipelines)
+{
+    init_geom_pipelines(
+        model.subgeometries,
+        sgroup.shaders,
+        app->get_main_pass(),
+        0,
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        app->get_window_size(),
+        pipelines,
+        pipelines_layouts);
+
+    auto framebuffers = app->get_main_framebuffers();
+
+    VkCommandBufferAllocateInfo buffers_alloc_info{};
+    buffers_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    buffers_alloc_info.pNext = nullptr;
+    buffers_alloc_info.commandPool = cmd_pool;
+    buffers_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    buffers_alloc_info.commandBufferCount = framebuffers.size();
+
+    cmd_buffers.init(vk_utils::context::get().device(), cmd_pool, &buffers_alloc_info, framebuffers.size());
+
+    VkCommandBufferBeginInfo cmd_buffer_begin_info{};
+    cmd_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cmd_buffer_begin_info.pNext = nullptr;
+    cmd_buffer_begin_info.flags = 0;
+    cmd_buffer_begin_info.pInheritanceInfo = nullptr;
+
+    VkClearValue clear_values[] {
+        {
+            .color {.float32 = {0.2, 0.3, 0.7, 1.}}
         },
         {
             .depthStencil = {.depth = 1.0f, .stencil = 0}
         }
     };
 
-    pass_begin_info.pClearValues = clears;
-    pass_begin_info.clearValueCount = std::size(clears);
+    VkRenderPassBeginInfo pass_begin_info{};
+    pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    pass_begin_info.pNext = nullptr;
+    pass_begin_info.renderPass = app->get_main_pass();
+    pass_begin_info.pClearValues = clear_values;
+    pass_begin_info.clearValueCount = std::size(clear_values);
+    pass_begin_info.renderArea = {
+        .offset = {0, 0},
+        .extent = app->get_window_size()
+    };
 
-    for (int i = 0; i < fbs.size(); ++i) {
-        auto res = vkBeginCommandBuffer(cmd_buffers[i], &cmd_buf_begin_info);
+    for (int i = 0; i < framebuffers.size(); ++i) {
+        pass_begin_info.framebuffer = framebuffers[i];
 
-        if (res != VK_SUCCESS) {
-            return -1;
-        }
-
-        pass_begin_info.framebuffer = fbs[i];
+        vkBeginCommandBuffer(cmd_buffers[i], &cmd_buffer_begin_info);
         vkCmdBeginRenderPass(cmd_buffers[i], &pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
-
-        vkCmdBindPipeline(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline);
-        VkBuffer v_buffer[] = {g_vertex_buffer};
-        VkDescriptorSet desc_sets[] = {g_ubo_descriptor_sets[i], g_texture_descriptor_sets[i]};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindDescriptorSets(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline_layout, 0, std::size(desc_sets), desc_sets, 0, nullptr);
-        vkCmdBindVertexBuffers(cmd_buffers[i], 0, 1, v_buffer, offsets);
-        vkCmdBindIndexBuffer(cmd_buffers[i], g_index_buffer, 0, VK_INDEX_TYPE_UINT16);
-        vkCmdDrawIndexed(cmd_buffers[i], std::size(indices), 1, 0, 0, 0);
-        vkCmdEndRenderPass(cmd_buffers[i]);
-        res = vkEndCommandBuffer(cmd_buffers[i]);
-
-        if (res != VK_SUCCESS) {
-            return -1;
+        for (int j = 0; j < model.subgeometries.size(); j++) {
+            vkCmdBindPipeline(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[j]);
+            VkDeviceSize vertex_buffer_offset = model.subgeometries[j].vertices_offset;
+            vkCmdBindVertexBuffers(cmd_buffers[i], 0, 1, model.vertex_buffer, &vertex_buffer_offset);
+            vkCmdBindIndexBuffer(cmd_buffers[i], model.index_buffer, model.subgeometries[j].indices_offset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
+            std::vector<VkDescriptorSet> desc_sets;
+            desc_sets.reserve(sgroup.shaders[j].descriptor_sets.size());
+            std::transform(sgroup.shaders[j].descriptor_sets.begin(), sgroup.shaders[j].descriptor_sets.end(), std::back_inserter(desc_sets), [](const vk_utils::descriptor_set_handler& set) {return set[0];});
+            vkCmdBindDescriptorSets(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_layouts[j], 0, sgroup.shaders[j].descriptor_sets.size(), desc_sets.data(), 0, nullptr);
+            vkCmdDrawIndexed(cmd_buffers[i], model.subgeometries[j].indices_size, 1, 0, 0, 0);
         }
+        vkCmdEndRenderPass(cmd_buffers[i]);
+        vkEndCommandBuffer(cmd_buffers[i]);
     }
 
-    return 0;
+    RAISE_ERROR_OK();
+}
+
+
+std::optional<obj_model> g_MODEL;
+std::optional<shader_group> g_DUMMY_SHADER_GROUP;
+std::vector<vk_utils::pipeline_layout_handler> g_PIPELINE_LAYOUTS;
+std::vector<vk_utils::graphics_pipeline_handler> g_GRAPHICS_PIPELINES;
+vk_utils::vma_buffer_handler g_UBO{};
+vk_utils::cmd_pool_handler g_COMMAND_POOL{};
+vk_utils::cmd_buffers_handler g_CMD_BUFFERS{};
+
+
+ERROR_TYPE init_dummy_model_resources(const char* path, const char** textures = nullptr, size_t textures_size = 0)
+{
+    VkCommandPoolCreateInfo cmd_pool_create_info{};
+    cmd_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cmd_pool_create_info.pNext = nullptr;
+    cmd_pool_create_info.queueFamilyIndex = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
+    g_COMMAND_POOL.init(vk_utils::context::get().device(), &cmd_pool_create_info);
+    g_MODEL.emplace();
+    g_DUMMY_SHADER_GROUP.emplace();
+
+    HANDLE_ERROR(create_buffer(g_UBO, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo)));
+    HANDLE_ERROR(load_obj_model(path, g_COMMAND_POOL, *g_MODEL, textures, textures_size));
+    HANDLE_ERROR(init_dummy_shaders(*g_MODEL, g_UBO, *g_DUMMY_SHADER_GROUP))
 }
 
 int main(int argn, const char** argv)
 {
     hello_triangle_app app;
 
-    app.set_on_create_callback([](const hello_triangle_app* app) {
-        return init_pipeline(app);
+    app.set_on_create_callback([argn, argv](const hello_triangle_app* app) {
+        if (argn <= 1) {
+            return -1;
+        }
+        const char** textures_list = nullptr;
+
+        if (argn > 2) {
+            textures_list = argv + 2;
+        }
+
+        HANDLE_ERROR(init_dummy_model_resources(argv[1], textures_list, argn - 2));
+        HANDLE_ERROR(record_obj_model_dummy_draw_commands(*g_MODEL, *g_DUMMY_SHADER_GROUP, app, g_COMMAND_POOL, g_CMD_BUFFERS, g_PIPELINE_LAYOUTS, g_GRAPHICS_PIPELINES));
+        return 0;
     });
 
     app.set_on_update_callback([](const hello_triangle_app* app, const VkCommandBuffer** cmd_bufs, uint32_t* bufs_count) {
         static bool is_first = true;
 
+        static float angle = 0.0;
+        angle += 0.01;
+
+        if (angle >= 360.0f) {
+            angle = 0.0f;
+        }
+
         static global_ubo ubo_data{};
-        ubo_data.model = glm::rotate(ubo_data.model, glm::radians(0.1f), glm::vec3{0.0f, 0.0f, 1.0f});
-        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(app->get_window_size().width), float(app->get_window_size().height), 0.01f, 100.0f);
-        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 1.0f, -1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+
+        const float len = g_MODEL->model_bound.hi.z - g_MODEL->model_bound.lo.z;
+        const float h = g_MODEL->model_bound.hi.y - g_MODEL->model_bound.lo.y;
+        const float w = g_MODEL->model_bound.hi.x - g_MODEL->model_bound.lo.x;
+
+        glm::vec3 center = g_MODEL->model_bound.lo + glm::vec3{len, h, w} * 0.5f;
+//        center.y = -center.y;
+        auto model = glm::identity<glm::mat4>();
+        model = glm::translate(model, center);
+        model = glm::rotate(model, glm::radians(-90.0f), glm::vec3{1.0f, 0.0f, 0.0f});
+        model = glm::rotate(model, glm::radians(angle), glm::vec3{0.0f, 0.0f, 1.0f});
+        ubo_data.model = model;
+
+        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(app->get_window_size().width), float(app->get_window_size().height), 0.01f, len * 10.0f);
+
+        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 0.0f, -len * 1.5f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
         ubo_data.mvp = ubo_data.projection * ubo_data.view * ubo_data.model;
 
         void* mapped_data;
-        vmaMapMemory(vk_utils::context::get().allocator(), g_global_uniform_buffer, &mapped_data);
+        vmaMapMemory(vk_utils::context::get().allocator(), g_UBO, &mapped_data);
         std::memcpy(mapped_data, &ubo_data, sizeof(ubo_data));
-        vmaFlushAllocation(vk_utils::context::get().allocator(), g_global_uniform_buffer, 0, VK_WHOLE_SIZE);
-        vmaUnmapMemory(vk_utils::context::get().allocator(), g_global_uniform_buffer);
+        vmaFlushAllocation(vk_utils::context::get().allocator(), g_UBO, 0, VK_WHOLE_SIZE);
+        vmaUnmapMemory(vk_utils::context::get().allocator(), g_UBO);
 
-        static VkCommandBuffer handlers[2];
-        handlers[1] = g_draw_cmd_buffers[app->get_current_swapchain_img_index()];
-
-        if (is_first) {
-            handlers[0] = g_data_copy_cmd_buffers[0];
-            *cmd_bufs = handlers;
-            *bufs_count = std::size(handlers);
-            is_first = false;
-        } else {
-            const VkCommandBuffer* handlers = g_draw_cmd_buffers;
-            *cmd_bufs = &handlers[app->get_current_swapchain_img_index()];
-            *bufs_count = 1;
-        }
-
+        const VkCommandBuffer* handlers = g_CMD_BUFFERS;
+        *cmd_bufs = &handlers[app->get_current_swapchain_img_index()];
+        *bufs_count = 1;
         return 0;
     });
 
     app.set_on_resize_callback([](const hello_triangle_app* app) {
-        g_draw_cmd_buffers.destroy();
-        g_pipeline.destroy();
-
-        return init_pipeline(app);
+        g_CMD_BUFFERS.destroy();
+        g_PIPELINE_LAYOUTS.clear();
+        g_GRAPHICS_PIPELINES.clear();
+        HANDLE_ERROR(record_obj_model_dummy_draw_commands(*g_MODEL, *g_DUMMY_SHADER_GROUP, app, g_COMMAND_POOL, g_CMD_BUFFERS, g_PIPELINE_LAYOUTS, g_GRAPHICS_PIPELINES));
+        return 0;
     });
 
     app.set_on_destroy_callback([](const hello_triangle_app* app) {
-        g_draw_cmd_buffers.destroy();
-        g_data_copy_cmd_buffers.destroy();
-
-        g_cmd_pool.destroy();
-        g_pipeline_layout.destroy();
-        g_pipeline.destroy();
-
-        g_vertex_buffer.destroy();
-        g_vertex_staging_buffer.destroy();
-        g_index_buffer.destroy();
-        g_index_staging_buffer.destroy();
-
-        g_global_uniform_buffer.destroy();
-        g_ubo_descriptor_set_layout.destroy();
-        g_texture_descriptor_set_layout.destroy();
-
-        g_ubo_descriptor_sets.destroy();
-        g_texture_descriptor_sets.destroy();
-
-        g_descriptor_pool.destroy();
-
-        g_shader_image.destroy();
-        g_shader_img_view.destroy();
-        g_shader_sampler.destroy();
-
-        for (auto& m : g_shader_modules) {
-            m.destroy();
-        }
+        g_PIPELINE_LAYOUTS.clear();
+        g_GRAPHICS_PIPELINES.clear();
+        g_CMD_BUFFERS.destroy();
+        g_COMMAND_POOL.destroy();
+        g_UBO.destroy();
+        g_MODEL.reset();
+        g_DUMMY_SHADER_GROUP.reset();
         return 0;
     });
 

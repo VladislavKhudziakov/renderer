@@ -13,6 +13,7 @@ namespace vk_utils
         struct queue_family_data {
             int32_t index;
             uint32_t max_queue_count;
+            int32_t queue_index;
         };
 
         struct extensions_info
