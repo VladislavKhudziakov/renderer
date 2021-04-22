@@ -46,7 +46,7 @@ function (make_bin)
                 OUTPUT ${SPIRV}
                 COMMAND ${CMAKE_COMMAND} -E make_directory ${SPIRV_DIR}
                 COMMAND ${CMAKE_COMMAND} -E copy ${GLSL} ${SPIRV_DIR}/${GLSL_FILE}
-                COMMAND ${GLSL_VALIDATOR} -V ${GLSL} -o ${SPIRV}
+                COMMAND ${GLSL_VALIDATOR} -V -Os ${GLSL} -o ${SPIRV}
                 DEPENDS ${GLSL})
 
         list(APPEND SPIRV_BINARY_FILES ${SPIRV})

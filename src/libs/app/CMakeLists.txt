@@ -6,4 +6,6 @@ make_bin(
     LIB_TYPE
         STATIC
     DEPENDS
-        errors)
+        errors
+        vk_utils
+        glfw)

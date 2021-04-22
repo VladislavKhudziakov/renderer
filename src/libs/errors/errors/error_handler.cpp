@@ -42,3 +42,32 @@ void errors::handle_error(errors::error e)
 }
 #endif
 
+ERROR_TYPE errors::handle_error_code(int32_t code, bool (*on_error)(int32_t), const char* err_msg)
+{
+    if (code != 0) {
+        if (on_error != nullptr) {
+            if (on_error(code)) {
+                RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
+            } else {
+                RAISE_ERROR_OK();
+            }
+        } else {
+            RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
+        }
+    }
+}
+
+ERROR_TYPE errors::handle_error_code(int32_t code, const std::function<bool(int32_t)>& on_error, const char* err_msg)
+{
+    if (code != 0) {
+        if (on_error) {
+            if (on_error(code)) {
+                RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
+            } else {
+                RAISE_ERROR_OK();
+            }
+        } else {
+            RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
+        }
+    }
+}

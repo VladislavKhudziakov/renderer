@@ -6,13 +6,15 @@
 #include <utility>
 #include <vector>
 
+#define VK_CHECK(code) PASS_ERROR(errors::handler_error_code((code)))
+
 namespace vk_utils
 {
     namespace detail
     {
         inline VkResult vkCreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pMessenger)
         {
-            auto function_impl = (PFN_vkCreateDebugUtilsMessengerEXT)(vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+            auto function_impl = (PFN_vkCreateDebugUtilsMessengerEXT) (vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
             return function_impl(instance, pCreateInfo, pAllocator, pMessenger);
         }
 
@@ -217,7 +219,7 @@ namespace vk_utils
     };
 
 
-    template<typename InitializerType, typename PoolType, typename AllocStructType, typename StructType, typename FreeResType, VkResult(*alloc_function)(InitializerType, const AllocStructType*, StructType*), FreeResType(*free_function)(InitializerType, PoolType, uint32_t, const StructType*)>
+    template<typename InitializerType, typename PoolType, typename AllocStructType, typename StructType, typename FreeResType, VkResult (*alloc_function)(InitializerType, const AllocStructType*, StructType*), FreeResType (*free_function)(InitializerType, PoolType, uint32_t, const StructType*)>
     class allocated_handler
     {
     public:
@@ -417,8 +419,8 @@ namespace vk_utils
     template<
         typename InitStructType,
         typename StructType,
-        VkResult(*init_func)(VmaAllocator, const InitStructType*, const VmaAllocationCreateInfo*, StructType*, VmaAllocation*, VmaAllocationInfo*),
-        void(*destroy_func)(VmaAllocator, StructType, VmaAllocation)>
+        VkResult (*init_func)(VmaAllocator, const InitStructType*, const VmaAllocationCreateInfo*, StructType*, VmaAllocation*, VmaAllocationInfo*),
+        void (*destroy_func)(VmaAllocator, StructType, VmaAllocation)>
     class vma_resource_handler
     {
     public:

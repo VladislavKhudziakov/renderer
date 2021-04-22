@@ -4,12 +4,7 @@
 
 #include <cinttypes>
 #include <string>
-
-
-//#define ERROR_WARN(code, m) errors::error(errors::WARN, uint32_t(code), std::string(m) + " in file " + __FILE__ " at line " + std::to_string(__LINE__))
-//#define ERROR_FATAL(code, m) errors::error(errors::FATAL, uint32_t(code), std::string(m) + " in file " + __FILE__ " at line " + std::to_string(__LINE__))
-//#define ERROR(code, m) errors::error(errors::ERR, uint32_t(code), std::string(m) + " in file " + __FILE__ " at line " + std::to_string(__LINE__))
-//#define ERROR_DEBUG(code, message) errors::error(errors::ERR, code, std::string(message) + " in file " __FILE__ " at line " + std::to_string(__LINE__), errors::error::serverity::debug)
+#include <functional>
 
 #ifndef NDEBUG
     #include <stdexcept>
@@ -38,7 +33,7 @@
             LOG_ERROR("Unknown Error. Occured in file " __FILE__ " at line ", __LINE__); \
         }
 
-#define PASS_ERROR(code) code;
+    #define PASS_ERROR(code) code;
 
 #else
     #define ERROR_TYPE errors::error
@@ -46,9 +41,9 @@
     #define RAISE_ERROR_FATAL(code, m) return errors::error(errors::FATAL, code, std::string(m) + " in file " + __FILE__ " at line " + std::to_string(__LINE__))
     #define RAISE_ERROR_OK() return errors::OK
     #define HANDLE_ERROR(code) errors::handle_error(code)
-    #define PASS_ERROR(code)  \
-        if(const auto err = (code); err != errors::OK) { \
-        return err;                      \
+    #define PASS_ERROR(code)                              \
+        if (const auto err = (code); err != errors::OK) { \
+            return err;                                   \
         }
 #endif
 
@@ -94,4 +89,8 @@ namespace errors
 
     void handle_error(errors::error);
 #endif
+
+    ERROR_TYPE handle_error_code(int32_t code, bool (*on_error)(int32_t code) = nullptr, const char* err_msg = nullptr);
+    ERROR_TYPE handle_error_code(int32_t code, const std::function<bool(int32_t)>&, const char* err_msg = nullptr);
+
 } // namespace errors
