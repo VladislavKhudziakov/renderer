@@ -61,7 +61,7 @@ namespace errors
     {
     public:
         explicit error(state err_state, int32_t code = 0, const std::string& msg = "");
-        const char* what() const _GLIBCXX_TXN_SAFE_DYN _GLIBCXX_NOTHROW override;
+        const char* what() const noexcept override;
 
         state err_state{OK};
         uint32_t code{0};

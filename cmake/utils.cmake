@@ -32,10 +32,11 @@ function (make_bin)
     endif()
 
     if (WIN32)
-        set(EXEC_EXTENSION ".exe")
+        set(GLSL_VALIDATOR $ENV{VULKAN_SDK}/Bin/glslangValidator.exe)
+    else()
+        set(GLSL_VALIDATOR ${GLSL_TOOLS}/glslangValidator)
     endif()
 
-    set(GLSL_VALIDATOR ${GLSL_TOOLS}/glslangValidator${EXEC_EXTENSION})
 
     foreach(GLSL ${NEW_APP_SHADERS})
         file(RELATIVE_PATH REL_GLSL_PATH ${CMAKE_CURRENT_LIST_DIR} ${GLSL})

@@ -1,4 +1,5 @@
 
+//#define NOMINMAX
 
 #include "tools.hpp"
 
@@ -9,7 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
-
+#include <algorithm>
 
 
 ERROR_TYPE vk_utils::load_image_2D(

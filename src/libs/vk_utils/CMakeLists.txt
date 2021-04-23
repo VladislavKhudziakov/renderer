@@ -1,4 +1,10 @@
 
+if (UNIX AND NOT APPLE)
+    set(VK_DEPS_LIBS vulkan X11 Xrandr Xi dl)
+else()
+    find_package(Vulkan REQUIRED)
+    set(VK_DEPS_LIBS Vulkan::Vulkan)
+endif()
 
 make_bin(
     NAME
@@ -7,6 +13,7 @@ make_bin(
     LIB_TYPE
         STATIC
     DEPENDS
+        ${VK_DEPS_LIBS}
         stb
         tinyobjloader
         errors

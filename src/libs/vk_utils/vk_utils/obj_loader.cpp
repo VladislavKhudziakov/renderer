@@ -7,6 +7,9 @@
 #include <tiny_obj_loader.h>
 
 #include <unordered_set>
+#include <optional>
+#include <array>
+#include <vector>
 
 ERROR_TYPE vk_utils::obj_loader::load_model(
     const char* path,
@@ -30,6 +33,8 @@ ERROR_TYPE vk_utils::obj_loader::load_model(
     }
 
     PASS_ERROR(init_obj_geometry(attrib, shapes, transfer_queue, command_pool, model));
+
+    RAISE_ERROR_OK();
 }
 
 

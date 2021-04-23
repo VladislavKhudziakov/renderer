@@ -5,7 +5,7 @@
 #include <logger/log.hpp>
 #include <cstdio>
 #include <cstring>
-
+#include <algorithm>
 
 namespace
 {
@@ -28,7 +28,7 @@ namespace
 #ifndef VMA_IMPLEMENTATION
     #define VMA_IMPLEMENTATION
     #ifndef NDEBUG
-        #define VMA_DEBUG_LOG(format, ...) log(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
+//            #define VMA_DEBUG_LOG(format, ...) log(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
 //            printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
     #endif
     #include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
@@ -166,7 +166,7 @@ namespace
 
             if (p.queueFlags & VK_QUEUE_COMPUTE_BIT) {
                 if (queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].index >= 0) {
-                    if (props[i].queueCount > props[vk_utils::context::QUEUE_TYPE_COMPUTE].queueCount) {
+                    if (props[i].queueCount > props[queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].index].queueCount) {
                         queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].index = i;
                         queue_families_indices[vk_utils::context::QUEUE_TYPE_COMPUTE].max_queue_count = props[i].queueCount;
                     }
@@ -178,7 +178,7 @@ namespace
 
             if (p.queueFlags & VK_QUEUE_TRANSFER_BIT) {
                 if (queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].index >= 0) {
-                    if (props[i].queueCount > props[vk_utils::context::QUEUE_TYPE_TRANSFER].queueCount) {
+                    if (props[i].queueCount > props[queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].index].queueCount) {
                         queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].index = i;
                         queue_families_indices[vk_utils::context::QUEUE_TYPE_TRANSFER].max_queue_count = props[i].queueCount;
                     }
@@ -198,7 +198,6 @@ namespace
         return true;
     };
 
-#ifndef NDEBUG
     const char* implicit_required_instance_layers[] = {
         "VK_LAYER_KHRONOS_validation"};
 
@@ -209,15 +208,6 @@ namespace
 
     const char* implicit_required_device_layers[] = {
         "VK_LAYER_KHRONOS_validation"};
-
-#else
-    const char* implicit_required_instance_layers[] = {};
-    const char* implicit_required_instance_extensions[] = {};
-
-    const char* implicit_required_device_extensions[]{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
-    const char* implicit_required_device_layers[] = {};
-#endif
 
 } // namespace
 

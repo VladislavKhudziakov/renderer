@@ -22,6 +22,8 @@
 #include <unordered_set>
 #include <variant>
 #include <chrono>
+#include <array>
+#include <algorithm>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
@@ -152,6 +154,7 @@ protected:
             m_app_info.argv[1], textures_list, m_app_info.argc - 2));
         PASS_ERROR(record_obj_model_dummy_draw_commands(
             m_model, m_dummy_shader_group, m_command_pool, m_command_buffers, m_pipelines_layout, m_graphics_pipelines));
+        RAISE_ERROR_OK();
     }
 
 
@@ -163,6 +166,8 @@ protected:
         m_command_buffers.destroy();
         HANDLE_ERROR(record_obj_model_dummy_draw_commands(
             m_model, m_dummy_shader_group, m_command_pool, m_command_buffers, m_pipelines_layout, m_graphics_pipelines));
+
+        RAISE_ERROR_OK();
     }
 
 
@@ -202,11 +207,14 @@ protected:
 
         begin_frame();
         finish_frame(m_command_buffers[m_swapchain_data.current_image]);
+
+        RAISE_ERROR_OK();
     }
 
     ERROR_TYPE on_window_size_changed(int w, int h) override
     {
-        vk_app::on_window_size_changed(w, h);
+        PASS_ERROR(vk_app::on_window_size_changed(w, h));
+        RAISE_ERROR_OK();
     }
 
     ERROR_TYPE load_shader(const std::string& path, VkDevice device, vk_utils::shader_module_handler& handle, VkShaderStageFlagBits& stage)
@@ -464,13 +472,14 @@ protected:
 
         for (size_t i = 0; i < shapes.size(); ++i) {
             auto& shape = shapes[i];
-            auto& mat = materials[shape.mesh.material_ids.front()];
 
             auto& m = model.subgeometries[i].material.emplace<blinn_phong_material>();
 
             int curr_diff_texture_index = 0;
 
             if (textures_size == 0) {
+                auto& mat = materials[shape.mesh.material_ids.front()];
+
                 if (!mat.diffuse_texname.empty()) {
                     auto tex_it = std::find(load_textures.begin(), load_textures.end(), mat.diffuse_texname);
                     if (tex_it == load_textures.end()) {
@@ -773,7 +782,8 @@ protected:
         m_command_pool.init(vk_utils::context::get().device(), &cmd_pool_create_info);
         HANDLE_ERROR(vk_utils::create_buffer(m_ubo, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo)));
         HANDLE_ERROR(load_obj_model(path, m_model, m_vertex_data_transfer_buffer, textures, textures_size));
-        HANDLE_ERROR(init_dummy_shaders(m_model, m_ubo, m_dummy_shader_group))
+        HANDLE_ERROR(init_dummy_shaders(m_model, m_ubo, m_dummy_shader_group));
+        RAISE_ERROR_OK();
     }
 
     ERROR_TYPE init_geom_pipelines(

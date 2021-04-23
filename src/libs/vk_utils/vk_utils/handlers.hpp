@@ -1,5 +1,10 @@
 #pragma once
 
+#if defined(__WIN32__) || defined(__WIN32) || defined(WIN32)
+    #define NOMINMAX
+#endif // defined(__WIN32__) || defined(__WIN32) || defeind(WIN32)
+
+
 #include <vk_utils/defs.hpp>
 #include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
 

@@ -4,6 +4,7 @@
 
 #include <GLFW/glfw3.h>
 #include <vk_utils/context.hpp>
+#include <algorithm>
 
 using namespace app;
 
@@ -327,6 +328,8 @@ ERROR_TYPE vk_app::begin_frame()
         } else {
             RAISE_ERROR_FATAL(-1, "cannot acquire image.");
         }
+
+        RAISE_ERROR_OK();
     }
 
     if (m_swapchain_data.frames_in_flight_fences[m_swapchain_data.current_image] != nullptr) {
@@ -339,6 +342,8 @@ ERROR_TYPE vk_app::begin_frame()
     }
 
     m_swapchain_data.frames_in_flight_fences[m_swapchain_data.current_image] = m_swapchain_data.render_finished_fences[m_swapchain_data.current_frame];
+
+    RAISE_ERROR_OK();
 }
 
 
@@ -397,4 +402,6 @@ ERROR_TYPE vk_app::finish_frame(VkCommandBuffer cmd_buffer)
         }));
 
     m_swapchain_data.current_frame = (m_swapchain_data.current_frame + 1) % m_swapchain_data.frames_count;
+
+    RAISE_ERROR_OK();
 }

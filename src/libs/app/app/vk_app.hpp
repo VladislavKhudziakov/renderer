@@ -3,6 +3,7 @@
 #include <app/base_app.hpp>
 
 #include <vk_utils/handlers.hpp>
+#include <optional>
 
 class GLFWwindow;
 
@@ -59,7 +60,10 @@ namespace app
         virtual ERROR_TYPE on_vulkan_initialized() = 0;
         virtual ERROR_TYPE on_swapchain_recreated() = 0;
         virtual ERROR_TYPE draw_frame() = 0;
-        virtual ERROR_TYPE on_window_size_changed(int w, int h){};
+        virtual ERROR_TYPE on_window_size_changed(int w, int h)
+        {
+            RAISE_ERROR_OK();
+        };
 
         VkSurfaceCapabilitiesKHR m_surface_capabilities{};
         swapchain_data m_swapchain_data{};
