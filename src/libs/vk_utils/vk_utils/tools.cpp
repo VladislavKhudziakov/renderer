@@ -4,8 +4,109 @@
 
 #include <vk_utils/context.hpp>
 
+#include <stb/stb_image.h>
+
 #include <cmath>
 #include <cstring>
+#include <memory>
+
+
+
+ERROR_TYPE vk_utils::load_image_2D(
+    const char* path,
+    VkQueue transfer_queue,
+    VkCommandPool cmd_pool,
+    vk_utils::vma_image_handler& image,
+    vk_utils::image_view_handler& img_view,
+    vk_utils::sampler_handler& sampler,
+    bool gen_mips)
+{
+    int w, h, c;
+    std::unique_ptr<stbi_uc, std::function<void(stbi_uc*)>> image_handler{
+        stbi_load(path, &w, &h, &c, 0),
+        [](stbi_uc* ptr) {if (ptr != nullptr) stbi_image_free(ptr); }};
+
+    if (image_handler == nullptr) {
+        RAISE_ERROR_WARN(-1, "cannot load image.");
+    }
+
+    std::vector<uint8_t> rgba_image_buffer;
+    const uint8_t* img_data_ptr = image_handler.get();
+
+    if ( c == STBI_rgb &&
+         !check_opt_tiling_format(VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
+         !check_opt_tiling_format(VK_FORMAT_R8G8B8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+        c = STBI_rgb_alpha;
+
+        rgba_image_buffer.reserve(w * h * 4);
+
+        for (size_t i = 0; i < w * h; ++i) {
+            rgba_image_buffer.push_back(img_data_ptr[i * 3]);
+            rgba_image_buffer.push_back(img_data_ptr[i * 3 + 1]);
+            rgba_image_buffer.push_back(img_data_ptr[i * 3 + 2]);
+            rgba_image_buffer.push_back(255);
+        }
+
+        img_data_ptr = rgba_image_buffer.data();
+    }
+
+    VkFormat fmt{};
+
+    switch (c) {
+        case STBI_grey:
+        {
+            if (check_opt_tiling_format(VK_FORMAT_R8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8_SRGB;
+            } else if (check_opt_tiling_format(VK_FORMAT_R8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8_UINT;
+            } else {
+                RAISE_ERROR_WARN(-1, "unsupported grey image format.");
+            }
+            break;
+        }
+        case STBI_grey_alpha:
+        {
+            if (check_opt_tiling_format(VK_FORMAT_R8G8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8G8_SRGB;
+            } else if (check_opt_tiling_format(VK_FORMAT_R8G8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8G8_UINT;
+            } else {
+                RAISE_ERROR_WARN(-1, "unsupported grey_alpha image format.");
+            }
+            break;
+        }
+        case STBI_rgb:
+        {
+            if (check_opt_tiling_format(VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8G8B8_SRGB;
+            } else if (check_opt_tiling_format(VK_FORMAT_R8G8B8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8G8B8_UINT;
+            } else {
+                RAISE_ERROR_WARN(-1, "unsupported rgb image format.");
+            }
+            break;
+        }
+        case STBI_rgb_alpha:
+        {
+            if (check_opt_tiling_format(VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8G8B8A8_SRGB;
+            } else if (check_opt_tiling_format(VK_FORMAT_R8G8B8A8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                fmt = VK_FORMAT_R8G8B8A8_UINT;
+            } else {
+                RAISE_ERROR_WARN(-1, "unsupported rgba image format.");
+            }
+            break;
+        }
+        default:
+            RAISE_ERROR_WARN(-1, "invalid img format.");
+    }
+
+    create_image_2D(transfer_queue, cmd_pool, w, h, fmt, gen_mips, img_data_ptr, image, img_view, sampler);
+
+    RAISE_ERROR_OK();
+}
+
+
 
 ERROR_TYPE vk_utils::create_image_2D(
     VkQueue transfer_queue,
@@ -14,7 +115,7 @@ ERROR_TYPE vk_utils::create_image_2D(
     uint32_t height,
     VkFormat format,
     bool gen_mips,
-    void* data,
+    const void* data,
     vk_utils::vma_image_handler& image,
     vk_utils::image_view_handler& image_view,
     vk_utils::sampler_handler& image_sampler)
@@ -83,6 +184,7 @@ ERROR_TYPE vk_utils::create_image_2D(
     image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = format;
     image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
     image_info.arrayLayers = 1;
@@ -349,7 +451,7 @@ ERROR_TYPE vk_utils::create_buffer(
     VkBufferUsageFlags buffer_usage,
     VmaMemoryUsage memory_usage,
     uint32_t size,
-    void* data)
+    const void* data)
 {
     VkBufferCreateInfo buffer_info{};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -410,4 +512,20 @@ vk_utils::semaphore_handler vk_utils::create_semaphore()
     semaphore.init(vk_utils::context::get().device(), &semaphore_info);
 
     return semaphore;
+}
+
+
+bool vk_utils::check_opt_tiling_format(VkFormat req_fmt, VkFormatFeatureFlagBits features_flags)
+{
+    VkFormatProperties props;
+    vkGetPhysicalDeviceFormatProperties(vk_utils::context::get().gpu(), req_fmt, &props);
+    return props.optimalTilingFeatures & features_flags;
+}
+
+
+bool vk_utils::check_linear_tiling_format(VkFormat req_fmt, VkFormatFeatureFlagBits features_flags)
+{
+    VkFormatProperties props;
+    vkGetPhysicalDeviceFormatProperties(vk_utils::context::get().gpu(), req_fmt, &props);
+    return props.linearTilingFeatures & features_flags;
 }

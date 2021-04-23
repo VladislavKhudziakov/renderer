@@ -7,5 +7,7 @@ make_bin(
     LIB_TYPE
         STATIC
     DEPENDS
+        stb
+        tinyobjloader
         errors
         VulkanMemoryAllocator)
