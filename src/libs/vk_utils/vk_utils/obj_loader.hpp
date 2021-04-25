@@ -21,7 +21,7 @@ namespace vk_utils
     public:
         enum obj_render_technique_type
         {
-            BLINN_PHONG,
+            PHONG,
             PBR
         };
 
@@ -77,6 +77,7 @@ namespace vk_utils
 
         struct  obj_model_info
         {
+            obj_render_technique_type model_render_technique = PHONG;
             std::vector<std::array<const char*, PHONG_SIZE>> model_textures{};
         };
 
@@ -99,6 +100,8 @@ namespace vk_utils
             const std::vector<tinyobj::shape_t>& shapes,
             const std::vector<tinyobj::material_t>& materials,
             const obj_model_info& model_info,
+            VkQueue transfer_queue,
+            VkCommandPool command_pool,
             obj_model& model);
     };
 

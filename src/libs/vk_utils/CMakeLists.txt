@@ -14,6 +14,7 @@ make_bin(
         STATIC
     DEPENDS
         ${VK_DEPS_LIBS}
+        shaderc
         stb
         tinyobjloader
         errors

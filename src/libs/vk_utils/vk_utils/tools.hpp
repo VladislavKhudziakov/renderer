@@ -6,7 +6,7 @@
 
 namespace vk_utils
 {
-    ERROR_TYPE load_image_2D(
+    ERROR_TYPE load_texture_2D(
         const char*,
         VkQueue transfer_queue,
         VkCommandPool cmd_pool,
@@ -15,7 +15,7 @@ namespace vk_utils
         vk_utils::sampler_handler& sampler,
         bool gen_mips = true);
 
-    ERROR_TYPE create_image_2D(
+    ERROR_TYPE create_texture_2D(
         VkQueue transfer_queue,
         VkCommandPool command_pool,
         uint32_t width,
@@ -33,6 +33,16 @@ namespace vk_utils
         VmaMemoryUsage memory_usage,
         uint32_t size,
         const void* data = nullptr);
+
+    ERROR_TYPE load_shader(
+        const char* shader_path,
+        vk_utils::shader_module_handler& handle,
+        VkShaderStageFlagBits& stage);
+
+    ERROR_TYPE create_shader_module(
+        const uint32_t* code,
+        uint32_t code_size,
+        vk_utils::shader_module_handler& handle);
 
     vk_utils::fence_handler create_fence(VkFenceCreateFlagBits flags = static_cast<VkFenceCreateFlagBits>(0));
     vk_utils::semaphore_handler create_semaphore();

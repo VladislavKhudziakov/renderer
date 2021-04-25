@@ -1,103 +1,17 @@
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
 
 #include <app/vk_app.hpp>
 #include <logger/log.hpp>
 
 #include <vk_utils/context.hpp>
 #include <vk_utils/tools.hpp>
+#include <vk_utils/obj_loader.hpp>
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/gtc/matrix_transform.hpp>
 
-#include <shaderc/shaderc.hpp>
-
-#include <cstring>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
 #include <vector>
-#include <unordered_set>
-#include <variant>
-#include <chrono>
-#include <array>
-#include <algorithm>
-
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb/stb_image.h>
-
-#define TINYOBJLOADER_IMPLEMENTATION
-#include <tiny_obj_loader.h>
-
-enum render_technique_type
-{
-    BLINN_PHONG,
-    PBR
-};
-
-
-enum blinn_phong_textures
-{
-    BLINN_PHONG_DIFFUSE,
-    BLINN_PHONG_AMBIENT,
-    BLINN_PHONG_SPECULAR,
-    BLINN_PHONG_SPECULAR_HIGHLIGHT,
-    BLINN_PHONG_BUMP,
-    BLINN_PHONG_DISPLACEMENT,
-    BLINN_PHONG_ALPHA,
-    BLINN_PHONG_REFLECTION,
-    BLINN_PHONG_SIZE,
-};
-
-
-struct blinn_phong_material
-{
-    std::array<int32_t, BLINN_PHONG_SIZE> material_textures{-1, -1, -1, -1, -1, -1, -1, -1};
-    std::array<glm::vec3, BLINN_PHONG_SIZE> material_coeffs{};
-};
-
-
-struct pbr_material
-{
-};
-
-
-struct bound
-{
-    glm::vec3 lo;
-    glm::vec3 hi;
-};
-
-
-struct subgeometry
-{
-    std::vector<VkFormat> format{};
-    uint32_t indices_offset{0};
-    uint32_t indices_size{0};
-    uint32_t indices_bias{0};
-    uint32_t vertices_offset{0};
-    uint32_t image_samplers_count;
-    render_technique_type render_technique;
-    std::variant<blinn_phong_material, pbr_material> material;
-};
-
-
-struct obj_model
-{
-    vk_utils::vma_buffer_handler vertex_buffer;
-    vk_utils::vma_buffer_handler index_buffer;
-
-    std::vector<vk_utils::vma_image_handler> tex_images;
-    std::vector<vk_utils::image_view_handler> tex_image_views;
-    std::vector<vk_utils::sampler_handler> tex_samplers;
-
-    std::vector<subgeometry> subgeometries;
-
-    bound model_bound;
-};
-
+#include <cstring>
 
 struct shader
 {
@@ -149,7 +63,7 @@ protected:
         }
 
         PASS_ERROR(init_main_render_pass());
-        PASS_ERROR(init_main_framebuffers());
+        PASS_ERROR(init_main_frame_buffers());
         PASS_ERROR(init_dummy_model_resources(
             m_app_info.argv[1], textures_list, m_app_info.argc - 2));
         PASS_ERROR(record_obj_model_dummy_draw_commands(
@@ -160,7 +74,7 @@ protected:
 
     ERROR_TYPE on_swapchain_recreated() override
     {
-        HANDLE_ERROR(init_main_framebuffers());
+        HANDLE_ERROR(init_main_frame_buffers());
         m_pipelines_layout.clear();
         m_graphics_pipelines.clear();
         m_command_buffers.destroy();
@@ -182,21 +96,15 @@ protected:
 
         static global_ubo ubo_data{};
 
-        const float len = m_model.model_bound.hi.z - m_model.model_bound.lo.z;
-        const float h = m_model.model_bound.hi.y - m_model.model_bound.lo.y;
-        const float w = m_model.model_bound.hi.x - m_model.model_bound.lo.x;
-
-        glm::vec3 center = m_model.model_bound.lo + glm::vec3{len, h, w} * 0.5f;
-        center.y = -center.y;
         auto model = glm::identity<glm::mat4>();
-        model = glm::translate(model, center);
+        model = glm::translate(model, {0.0f, 0.0f, 0.0f});
         model = glm::rotate(model, glm::radians(-90.0f), glm::vec3{1.0f, 0.0f, 0.0f});
         model = glm::rotate(model, glm::radians(angle), glm::vec3{0.0f, 0.0f, 1.0f});
         ubo_data.model = model;
 
-        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(m_swapchain_data.swapchain_info->imageExtent.width), float(m_swapchain_data.swapchain_info->imageExtent.height), 0.01f, len * 10.0f);
+        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(m_swapchain_data.swapchain_info->imageExtent.width), float(m_swapchain_data.swapchain_info->imageExtent.height), 0.01f, 100.0f);
 
-        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 0.0f, -len * 1.5f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 0.0f, -3.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
         ubo_data.mvp = ubo_data.projection * ubo_data.view * ubo_data.model;
 
         void* mapped_data;
@@ -217,114 +125,8 @@ protected:
         RAISE_ERROR_OK();
     }
 
-    ERROR_TYPE load_shader(const std::string& path, VkDevice device, vk_utils::shader_module_handler& handle, VkShaderStageFlagBits& stage)
-    {
-        std::unique_ptr<FILE, std::function<void(FILE*)>> f_handle(
-            nullptr, [](FILE* f) { fclose(f); });
 
-        bool is_spv = path.find(".spv") != std::string::npos;
-
-        if (is_spv) {
-            f_handle.reset(fopen(path.c_str(), "rb"));
-        } else {
-            f_handle.reset(fopen(path.c_str(), "r"));
-        }
-
-        if (f_handle == nullptr) {
-            RAISE_ERROR_FATAL(-1, "cannot load shader file.");
-        }
-
-        fseek(f_handle.get(), 0L, SEEK_END);
-        auto size = ftell(f_handle.get());
-        fseek(f_handle.get(), 0L, SEEK_SET);
-
-        VkShaderModuleCreateInfo shader_module_info{};
-        shader_module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        shader_module_info.pNext = nullptr;
-
-        if (is_spv) {
-            std::vector<char> bytes(size);
-            fread(bytes.data(), 1, size, f_handle.get());
-            shader_module_info.codeSize = bytes.size();
-            shader_module_info.pCode = reinterpret_cast<const uint32_t*>(bytes.data());
-
-            auto res = handle.init(device, &shader_module_info);
-
-            if (res != VK_SUCCESS) {
-                RAISE_ERROR_FATAL(-1, "cannot load shader file.");
-            }
-
-        } else {
-            static shaderc::Compiler compiler{};
-
-            std::pair<shaderc_shader_kind, const char*> kind;
-
-            static std::unordered_map<std::string, std::pair<shaderc_shader_kind, const char*>> kinds{
-                {".vert", {shaderc_shader_kind::shaderc_glsl_vertex_shader, "vs"}},
-                {".frag", {shaderc_shader_kind::shaderc_glsl_fragment_shader, "fs"}}};
-
-            bool found = false;
-
-            for (const auto& [stage_name, kind_val] : kinds) {
-                if (path.find(stage_name) != std::string::npos) {
-                    kind = kind_val;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
-                RAISE_ERROR_FATAL(-1, "cannot load shader file.");
-            }
-
-            std::string source;
-            source.resize(size);
-            fread(source.data(), 1, size, f_handle.get());
-
-            shaderc::CompileOptions options;
-
-#ifndef NDEBUG
-            options.SetOptimizationLevel(
-                shaderc_optimization_level_zero);
-            options.SetGenerateDebugInfo();
-#else
-            options.SetOptimizationLevel(
-                shaderc_optimization_level_performance);
-#endif
-            shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(source, kind.first, kind.second, options);
-            if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
-                LOG_ERROR(result.GetErrorMessage());
-                RAISE_ERROR_FATAL(-1, "cannot load shader file.");
-            }
-
-            std::vector<uint32_t> shaderSPRV;
-            shaderSPRV.assign(result.begin(), result.end());
-
-            shader_module_info.codeSize = shaderSPRV.size() * sizeof(uint32_t);
-            shader_module_info.pCode = shaderSPRV.data();
-
-            auto res = handle.init(device, &shader_module_info);
-
-            if (res != VK_SUCCESS) {
-                RAISE_ERROR_FATAL(-1, "cannot load shader file.");
-            }
-        }
-
-        static std::unordered_map<std::string, VkShaderStageFlagBits> stages{
-            {".vert", VK_SHADER_STAGE_VERTEX_BIT},
-            {".frag", VK_SHADER_STAGE_FRAGMENT_BIT}};
-
-        for (const auto& [stage_name, stage_val] : stages) {
-            if (path.find(stage_name) != std::string::npos) {
-                stage = stage_val;
-                RAISE_ERROR_OK();
-            }
-        }
-
-        RAISE_ERROR_FATAL(-1, "cannot load shader file.");
-    }
-
-    ERROR_TYPE init_dummy_shaders(const obj_model& model, const VkBuffer ubo, shader_group& sgroup)
+    ERROR_TYPE init_dummy_shaders(const vk_utils::obj_loader::obj_model& model, const VkBuffer ubo, shader_group& sgroup)
     {
         sgroup.shader_modules.reserve(2);
         auto& vs = sgroup.shader_modules.emplace_back();
@@ -332,8 +134,8 @@ protected:
         auto& fs = sgroup.shader_modules.emplace_back();
         VkShaderStageFlagBits fs_stage{};
 
-        PASS_ERROR(load_shader("./shaders/dummy.vert.glsl.spv", vk_utils::context::get().device(), vs, vs_stage));
-        PASS_ERROR(load_shader("./shaders/dummy.frag.glsl.spv", vk_utils::context::get().device(), fs, fs_stage));
+        vk_utils::load_shader("./shaders/dummy.vert.glsl.spv", vs, vs_stage);
+        vk_utils::load_shader("./shaders/dummy.frag.glsl.spv", fs, fs_stage);
 
         VkDescriptorSetLayoutBinding bindings[]{
             {
@@ -367,18 +169,18 @@ protected:
         VkDescriptorPoolSize descriptor_pool_sizes[]{
             {
                 .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = static_cast<uint32_t>(model.subgeometries.size()),
+                .descriptorCount = static_cast<uint32_t>(model.sub_geometries.size()),
             },
             {
                 .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = static_cast<uint32_t>(model.subgeometries.size()),
+                .descriptorCount = static_cast<uint32_t>(model.sub_geometries.size()),
             }};
 
         VkDescriptorPoolCreateInfo desc_pool_info{};
         desc_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         desc_pool_info.pNext = nullptr;
         desc_pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        desc_pool_info.maxSets = model.subgeometries.size() * 2;
+        desc_pool_info.maxSets = model.sub_geometries.size() * 2;
         desc_pool_info.pPoolSizes = descriptor_pool_sizes;
         desc_pool_info.poolSizeCount = std::size(descriptor_pool_sizes);
 
@@ -386,8 +188,7 @@ protected:
             RAISE_ERROR_FATAL(-1, "cannot init desc pool.");
         }
 
-
-        for (auto& subgeom : model.subgeometries) {
+        for (auto& subgeom : model.sub_geometries) {
             auto& s = sgroup.shaders.emplace_back();
             s.modules.emplace_back(vs);
             s.modules.emplace_back(fs);
@@ -430,15 +231,15 @@ protected:
             VkSampler sampler{nullptr};
 
             switch (subgeom.render_technique) {
-                case BLINN_PHONG: {
-                    auto& m = std::get<blinn_phong_material>(subgeom.material);
-                    if (m.material_textures[BLINN_PHONG_DIFFUSE] >= 0) {
-                        img_view = model.tex_image_views[m.material_textures[BLINN_PHONG_DIFFUSE]];
-                        sampler = model.tex_samplers[m.material_textures[BLINN_PHONG_DIFFUSE]];
+                case vk_utils::obj_loader::PHONG: {
+                    auto& m = std::get<vk_utils::obj_loader::obj_phong_material>(subgeom.material);
+                    if (m.material_textures[vk_utils::obj_loader::PHONG_DIFFUSE] >= 0) {
+                        img_view = model.textures[m.material_textures[m.material_textures[vk_utils::obj_loader::PHONG_DIFFUSE]]].image_view;
+                        sampler = model.textures[m.material_textures[m.material_textures[vk_utils::obj_loader::PHONG_DIFFUSE]]].sampler;
                     }
                 } break;
-                case PBR:
-                    break;
+                case vk_utils::obj_loader::PBR:
+                    RAISE_ERROR_FATAL(-1, "unsupported render technique.");
             }
 
             if (img_view != nullptr) {
@@ -457,322 +258,6 @@ protected:
         RAISE_ERROR_OK();
     }
 
-    ERROR_TYPE init_obj_materials(
-        const std::vector<tinyobj::shape_t>& shapes,
-        const std::vector<tinyobj::material_t>& materials,
-        obj_model& model,
-        const char** textures,
-        size_t textures_size)
-    {
-        std::vector<std::string> load_textures;
-
-        for (int i = 0; i < textures_size; ++i) {
-            load_textures.emplace_back(textures[i]);
-        }
-
-        for (size_t i = 0; i < shapes.size(); ++i) {
-            auto& shape = shapes[i];
-
-            auto& m = model.subgeometries[i].material.emplace<blinn_phong_material>();
-
-            int curr_diff_texture_index = 0;
-
-            if (textures_size == 0) {
-                auto& mat = materials[shape.mesh.material_ids.front()];
-
-                if (!mat.diffuse_texname.empty()) {
-                    auto tex_it = std::find(load_textures.begin(), load_textures.end(), mat.diffuse_texname);
-                    if (tex_it == load_textures.end()) {
-                        m.material_textures[BLINN_PHONG_DIFFUSE] = load_textures.size();
-                        load_textures.emplace_back(mat.diffuse_texname);
-                    } else {
-                        m.material_textures[BLINN_PHONG_DIFFUSE] = std::distance(load_textures.begin(), tex_it);
-                    }
-                }
-            } else {
-                m.material_textures[BLINN_PHONG_DIFFUSE] = std::min(i, textures_size - 1);
-            }
-        }
-
-        model.tex_images.reserve(load_textures.size());
-        model.tex_image_views.reserve(load_textures.size());
-        model.tex_samplers.reserve(load_textures.size());
-
-        for (auto& tex : load_textures) {
-            auto& i = model.tex_images.emplace_back();
-            auto& v = model.tex_image_views.emplace_back();
-            auto& s = model.tex_samplers.emplace_back();
-
-            PASS_ERROR(vk_utils::load_image_2D(tex.c_str(), vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), m_command_pool, i, v, s));
-        }
-
-        RAISE_ERROR_OK();
-    }
-
-    ERROR_TYPE init_obj_geometry(
-        const tinyobj::attrib_t& attrib,
-        const std::vector<tinyobj::shape_t>& shapes,
-        vk_utils::vma_buffer_handler& v_buffer,
-        vk_utils::vma_buffer_handler& i_buffer,
-        std::vector<subgeometry>& subgeoms,
-        bound& model_bound,
-        vk_utils::cmd_buffers_handler& cmd_buffer)
-    {
-        model_bound.lo = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
-        model_bound.hi = {std::numeric_limits<float>::min(), std::numeric_limits<float>::min(), std::numeric_limits<float>::min()};
-
-        struct vertex
-        {
-            std::array<float, 3> position;
-            std::optional<std::array<float, 3>> normal;
-            std::optional<std::array<float, 3>> texcoord;
-        };
-
-        struct geometry
-        {
-            std::vector<vertex> vertices;
-            std::vector<uint32_t> indices;
-            std::vector<VkFormat> vertex_format;
-            size_t vertex_size = 0;
-        };
-
-        std::vector<geometry> geometries;
-        geometries.reserve(shapes.size());
-
-        auto vert_eq = [](const vertex& v1) {
-            return [&v1](const vertex& v2) {
-                if (v1.position != v2.position) {
-                    return false;
-                }
-                if (v1.normal && v2.normal && (*v1.normal != *v2.normal)) {
-                    return false;
-                }
-                if (v1.texcoord && v2.texcoord && (*v1.texcoord != *v2.texcoord)) {
-                    return false;
-                }
-                return true;
-            };
-        };
-
-        for (const auto& shape : shapes) {
-            auto& g = geometries.emplace_back();
-            g.vertices.reserve(shape.mesh.indices.size());
-            auto& i = shape.mesh.indices.front();
-
-            g.vertex_format.emplace_back(VK_FORMAT_R32G32B32_SFLOAT);
-            g.vertex_size += sizeof(glm::vec3);
-
-            if (i.normal_index >= 0) {
-                g.vertex_format.emplace_back(VK_FORMAT_R32G32B32_SFLOAT);
-                g.vertex_size += sizeof(glm::vec3);
-            }
-
-            if (i.texcoord_index >= 0) {
-                g.vertex_format.emplace_back(VK_FORMAT_R32G32_SFLOAT);
-                g.vertex_size += sizeof(glm::vec2);
-            }
-
-            for (auto& i : shape.mesh.indices) {
-                vertex v{};
-
-                v.position[0] = attrib.vertices[3 * i.vertex_index];
-                v.position[1] = attrib.vertices[3 * i.vertex_index + 1];
-                v.position[2] = attrib.vertices[3 * i.vertex_index + 2];
-
-                if (i.normal_index >= 0) {
-                    v.normal = {attrib.normals[3 * i.normal_index], attrib.vertices[3 * i.normal_index + 1], attrib.vertices[3 * i.normal_index + 2]};
-                }
-
-                if (i.texcoord_index >= 0) {
-                    v.texcoord = {attrib.texcoords[2 * i.texcoord_index], attrib.texcoords[2 * i.texcoord_index + 1]};
-                }
-
-                auto vertex_exist = std::find_if(g.vertices.begin(), g.vertices.end(), vert_eq(v));
-
-                if (vertex_exist != g.vertices.end()) {
-                    g.indices.emplace_back(std::distance(g.vertices.begin(), vertex_exist));
-                } else {
-                    g.indices.emplace_back(g.vertices.size());
-                    g.vertices.emplace_back(v);
-
-                    model_bound.lo.x = std::min(v.position[0], model_bound.lo.x);
-                    model_bound.lo.y = std::min(v.position[1], model_bound.lo.y);
-                    model_bound.lo.z = std::min(v.position[2], model_bound.lo.z);
-
-                    model_bound.hi.x = std::max(v.position[0], model_bound.hi.x);
-                    model_bound.hi.y = std::max(v.position[1], model_bound.hi.y);
-                    model_bound.hi.z = std::max(v.position[2], model_bound.hi.z);
-                }
-            }
-        }
-        size_t vert_values_count = 0;
-        size_t indices_count = 0;
-
-        std::vector<float> vert_buffer_data;
-        std::vector<uint32_t> index_buffer_data;
-
-        for (auto& g : geometries) {
-            size_t vertex_floats_count = 3;
-
-            if (g.vertices.front().normal) {
-                vertex_floats_count += 3;
-            }
-
-            if (g.vertices.front().texcoord) {
-                vertex_floats_count += 2;
-            }
-
-            vert_values_count += vertex_floats_count * g.vertices.size();
-            indices_count += g.indices.size();
-        }
-
-        vert_buffer_data.reserve(vert_values_count);
-        index_buffer_data.reserve(indices_count);
-        uint32_t start_vertex = 0;
-        size_t indices_offset = 0;
-        size_t vertices_offset = 0;
-
-        subgeoms.reserve(geometries.size());
-
-        for (auto& g : geometries) {
-            auto& sg = subgeoms.emplace_back();
-            sg.format = g.vertex_format;
-            sg.indices_offset = indices_offset;
-            sg.vertices_offset = vertices_offset;
-            sg.indices_bias = start_vertex;
-            sg.indices_size = g.indices.size();
-
-            for (const auto& v : g.vertices) {
-                vert_buffer_data.push_back(v.position[0]);
-                vert_buffer_data.push_back(v.position[1]);
-                vert_buffer_data.push_back(v.position[2]);
-
-                if (v.normal) {
-                    vert_buffer_data.push_back(v.normal->at(0));
-                    vert_buffer_data.push_back(v.normal->at(1));
-                    vert_buffer_data.push_back(v.normal->at(2));
-                }
-
-                if (v.texcoord) {
-                    vert_buffer_data.push_back(v.texcoord->at(0));
-                    vert_buffer_data.push_back(v.texcoord->at(1));
-                }
-            }
-
-            for (const uint32_t index : g.indices) {
-                index_buffer_data.push_back(index);
-            }
-
-            start_vertex += g.vertices.size();
-            vertices_offset += g.vertices.size() * g.vertex_size;
-            indices_offset += g.indices.size();
-        }
-
-        vk_utils::create_buffer(m_vert_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, vert_buffer_data.size() * sizeof(float), vert_buffer_data.data());
-        vk_utils::create_buffer(m_index_staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, index_buffer_data.size() * sizeof(uint32_t), index_buffer_data.data());
-
-        vk_utils::create_buffer(v_buffer, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, vert_buffer_data.size() * sizeof(float));
-        vk_utils::create_buffer(i_buffer, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, index_buffer_data.size() * sizeof(uint32_t));
-
-        VkCommandBufferAllocateInfo cmd_buffer_alloc_info{};
-        cmd_buffer_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cmd_buffer_alloc_info.pNext = nullptr;
-        cmd_buffer_alloc_info.commandPool = m_command_pool;
-        cmd_buffer_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cmd_buffer_alloc_info.commandBufferCount = 1;
-        cmd_buffer.init(vk_utils::context::get().device(), m_command_pool, &cmd_buffer_alloc_info, 1);
-
-        VkCommandBufferBeginInfo cmd_buffer_begin_info{};
-        cmd_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        cmd_buffer_begin_info.pNext = nullptr;
-        cmd_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        cmd_buffer_begin_info.pInheritanceInfo = nullptr;
-
-        vkBeginCommandBuffer(cmd_buffer[0], &cmd_buffer_begin_info);
-
-        VkBufferCopy vert_region{};
-        vert_region.srcOffset = 0;
-        vert_region.dstOffset = 0;
-        vert_region.size = vert_buffer_data.size() * sizeof(float);
-        vkCmdCopyBuffer(cmd_buffer[0], m_vert_staging_buffer, v_buffer, 1, &vert_region);
-
-        VkBufferCopy index_region{};
-        index_region.srcOffset = 0;
-        index_region.dstOffset = 0;
-        index_region.size = index_buffer_data.size() * sizeof(uint32_t);
-        vkCmdCopyBuffer(cmd_buffer[0], m_index_staging_buffer, i_buffer, 1, &index_region);
-
-        VkBufferMemoryBarrier buffer_barriers[]{
-            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-             .pNext = nullptr,
-             .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-             .dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = v_buffer,
-             .offset = 0,
-             .size = vert_region.size},
-            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-             .pNext = nullptr,
-             .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-             .dstAccessMask = VK_ACCESS_INDEX_READ_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = i_buffer,
-             .offset = 0,
-             .size = index_region.size}};
-
-        vkCmdPipelineBarrier(
-            cmd_buffer[0],
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-            0,
-            0,
-            nullptr,
-            std::size(buffer_barriers),
-            buffer_barriers,
-            0,
-            nullptr);
-
-        vkEndCommandBuffer(cmd_buffer[0]);
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.pNext = nullptr;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = cmd_buffer;
-
-        vkQueueSubmit(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), 1, &submit_info, nullptr);
-
-        RAISE_ERROR_OK();
-    }
-
-    ERROR_TYPE load_obj_model(
-        const char* path,
-        obj_model& model,
-        vk_utils::cmd_buffers_handler& vert_data_transfer_buffer,
-        const char** textures,
-        size_t textures_size)
-    {
-        tinyobj::ObjReader reader;
-
-        if (!reader.ParseFromFile(path)) {
-            RAISE_ERROR_FATAL(-1, reader.Error());
-        }
-
-        const tinyobj::attrib_t& attrib = reader.GetAttrib();
-        const std::vector<tinyobj::shape_t>& shapes = reader.GetShapes();
-        const std::vector<tinyobj::material_t>& materials = reader.GetMaterials();
-
-        if (!reader.Warning().empty()) {
-            LOG_WARN(reader.Warning());
-        }
-
-        PASS_ERROR(init_obj_geometry(attrib, shapes, model.vertex_buffer, model.index_buffer, model.subgeometries, model.model_bound, vert_data_transfer_buffer));
-        PASS_ERROR(init_obj_materials(shapes, materials, model, textures, textures_size));
-
-        RAISE_ERROR_OK();
-    }
-
     ERROR_TYPE init_dummy_model_resources(const char* path, const char** textures = nullptr, size_t textures_size = 0)
     {
         VkCommandPoolCreateInfo cmd_pool_create_info{};
@@ -780,22 +265,31 @@ protected:
         cmd_pool_create_info.pNext = nullptr;
         cmd_pool_create_info.queueFamilyIndex = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
         m_command_pool.init(vk_utils::context::get().device(), &cmd_pool_create_info);
-        HANDLE_ERROR(vk_utils::create_buffer(m_ubo, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo)));
-        HANDLE_ERROR(load_obj_model(path, m_model, m_vertex_data_transfer_buffer, textures, textures_size));
-        HANDLE_ERROR(init_dummy_shaders(m_model, m_ubo, m_dummy_shader_group));
+        PASS_ERROR(vk_utils::create_buffer(m_ubo, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo)));
+
+        vk_utils::obj_loader::obj_model_info model_info{};
+        for (int i = 0; i < textures_size; ++i) {
+            auto& mat_textures = model_info.model_textures.emplace_back();
+            mat_textures[0] = textures[i];
+        }
+
+        vk_utils::obj_loader loader{};
+        PASS_ERROR(loader.load_model(path, model_info, vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), m_command_pool, m_model));
+        PASS_ERROR(init_dummy_shaders(m_model, m_ubo, m_dummy_shader_group));
+
         RAISE_ERROR_OK();
     }
 
     ERROR_TYPE init_geom_pipelines(
-        const std::vector<subgeometry>& subgeoms,
+        const vk_utils::obj_loader::obj_model& model,
         const std::vector<shader>& shaders,
         VkPrimitiveTopology topo,
         VkExtent2D input_viewport,
         std::vector<vk_utils::graphics_pipeline_handler>& pipelines,
         std::vector<vk_utils::pipeline_layout_handler>& pipeline_layouts)
     {
-        for (int i = 0; i < subgeoms.size(); ++i) {
-            const auto& subgeom = subgeoms[i];
+        for (int i = 0; i < model.sub_geometries.size(); ++i) {
+            const auto& subgeom = model.sub_geometries[i];
             const auto& shader = shaders[i];
 
             std::vector<VkPipelineShaderStageCreateInfo> shader_stages{};
@@ -993,7 +487,7 @@ protected:
     }
 
     ERROR_TYPE record_obj_model_dummy_draw_commands(
-        const obj_model& model,
+        const vk_utils::obj_loader::obj_model& model,
         const shader_group& sgroup,
         VkCommandPool cmd_pool,
         vk_utils::cmd_buffers_handler& cmd_buffers,
@@ -1001,7 +495,7 @@ protected:
         std::vector<vk_utils::graphics_pipeline_handler>& pipelines)
     {
         init_geom_pipelines(
-            model.subgeometries,
+            model,
             sgroup.shaders,
             VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
             m_swapchain_data.swapchain_info->imageExtent,
@@ -1044,16 +538,16 @@ protected:
 
             vkBeginCommandBuffer(cmd_buffers[i], &cmd_buffer_begin_info);
             vkCmdBeginRenderPass(cmd_buffers[i], &pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
-            for (int j = 0; j < model.subgeometries.size(); j++) {
+            for (int j = 0; j < model.sub_geometries.size(); j++) {
                 vkCmdBindPipeline(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[j]);
-                VkDeviceSize vertex_buffer_offset = model.subgeometries[j].vertices_offset;
+                VkDeviceSize vertex_buffer_offset = model.sub_geometries[j].vertices_offset;
                 vkCmdBindVertexBuffers(cmd_buffers[i], 0, 1, model.vertex_buffer, &vertex_buffer_offset);
-                vkCmdBindIndexBuffer(cmd_buffers[i], model.index_buffer, model.subgeometries[j].indices_offset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
+                vkCmdBindIndexBuffer(cmd_buffers[i], model.index_buffer, model.sub_geometries[j].indices_offset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
                 std::vector<VkDescriptorSet> desc_sets;
                 desc_sets.reserve(sgroup.shaders[j].descriptor_sets.size());
                 std::transform(sgroup.shaders[j].descriptor_sets.begin(), sgroup.shaders[j].descriptor_sets.end(), std::back_inserter(desc_sets), [](const vk_utils::descriptor_set_handler& set) { return set[0]; });
                 vkCmdBindDescriptorSets(cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_layouts[j], 0, sgroup.shaders[j].descriptor_sets.size(), desc_sets.data(), 0, nullptr);
-                vkCmdDrawIndexed(cmd_buffers[i], model.subgeometries[j].indices_size, 1, 0, 0, 0);
+                vkCmdDrawIndexed(cmd_buffers[i], model.sub_geometries[j].indices_size, 1, 0, 0, 0);
             }
             vkCmdEndRenderPass(cmd_buffers[i]);
             vkEndCommandBuffer(cmd_buffers[i]);
@@ -1147,7 +641,7 @@ protected:
         RAISE_ERROR_OK();
     }
 
-    ERROR_TYPE init_main_framebuffers()
+    ERROR_TYPE init_main_frame_buffers()
     {
         m_main_depth_image.destroy();
         m_main_depth_image_view.destroy();
@@ -1231,7 +725,7 @@ protected:
         RAISE_ERROR_OK();
     }
 
-    obj_model m_model{};
+    vk_utils::obj_loader::obj_model m_model{};
     shader_group m_dummy_shader_group{};
 
     vk_utils::vma_buffer_handler m_vert_staging_buffer{};
@@ -1252,8 +746,6 @@ protected:
     std::vector<vk_utils::framebuffer_handler> m_main_pass_framebuffers{};
 
     vk_utils::cmd_buffers_handler m_command_buffers{};
-    vk_utils::cmd_buffers_handler m_vertex_data_transfer_buffer{};
-    vk_utils::cmd_buffers_handler m_images_transfer_buffer{};
 };
 
 

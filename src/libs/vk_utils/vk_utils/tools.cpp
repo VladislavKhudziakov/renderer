@@ -1,11 +1,10 @@
 
-//#define NOMINMAX
-
 #include "tools.hpp"
 
 #include <vk_utils/context.hpp>
 
 #include <stb/stb_image.h>
+#include <shaderc/shaderc.hpp>
 
 #include <cmath>
 #include <cstring>
@@ -13,13 +12,13 @@
 #include <algorithm>
 
 
-ERROR_TYPE vk_utils::load_image_2D(
+ERROR_TYPE vk_utils::load_texture_2D(
     const char* path,
     VkQueue transfer_queue,
     VkCommandPool cmd_pool,
-    vk_utils::vma_image_handler& image,
-    vk_utils::image_view_handler& img_view,
-    vk_utils::sampler_handler& sampler,
+    vk_utils::vma_image_handler& out_image,
+    vk_utils::image_view_handler& out_img_view,
+    vk_utils::sampler_handler& out_sampler,
     bool gen_mips)
 {
     int w, h, c;
@@ -34,9 +33,7 @@ ERROR_TYPE vk_utils::load_image_2D(
     std::vector<uint8_t> rgba_image_buffer;
     const uint8_t* img_data_ptr = image_handler.get();
 
-    if ( c == STBI_rgb &&
-         !check_opt_tiling_format(VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
-         !check_opt_tiling_format(VK_FORMAT_R8G8B8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+    if (c == STBI_rgb && !check_opt_tiling_format(VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) && !check_opt_tiling_format(VK_FORMAT_R8G8B8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
         c = STBI_rgb_alpha;
 
         rgba_image_buffer.reserve(w * h * 4);
@@ -54,8 +51,7 @@ ERROR_TYPE vk_utils::load_image_2D(
     VkFormat fmt{};
 
     switch (c) {
-        case STBI_grey:
-        {
+        case STBI_grey: {
             if (check_opt_tiling_format(VK_FORMAT_R8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
                 fmt = VK_FORMAT_R8_SRGB;
             } else if (check_opt_tiling_format(VK_FORMAT_R8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
@@ -65,8 +61,7 @@ ERROR_TYPE vk_utils::load_image_2D(
             }
             break;
         }
-        case STBI_grey_alpha:
-        {
+        case STBI_grey_alpha: {
             if (check_opt_tiling_format(VK_FORMAT_R8G8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
                 fmt = VK_FORMAT_R8G8_SRGB;
             } else if (check_opt_tiling_format(VK_FORMAT_R8G8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
@@ -76,8 +71,7 @@ ERROR_TYPE vk_utils::load_image_2D(
             }
             break;
         }
-        case STBI_rgb:
-        {
+        case STBI_rgb: {
             if (check_opt_tiling_format(VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
                 fmt = VK_FORMAT_R8G8B8_SRGB;
             } else if (check_opt_tiling_format(VK_FORMAT_R8G8B8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
@@ -87,8 +81,7 @@ ERROR_TYPE vk_utils::load_image_2D(
             }
             break;
         }
-        case STBI_rgb_alpha:
-        {
+        case STBI_rgb_alpha: {
             if (check_opt_tiling_format(VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
                 fmt = VK_FORMAT_R8G8B8A8_SRGB;
             } else if (check_opt_tiling_format(VK_FORMAT_R8G8B8A8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
@@ -102,14 +95,13 @@ ERROR_TYPE vk_utils::load_image_2D(
             RAISE_ERROR_WARN(-1, "invalid img format.");
     }
 
-    create_image_2D(transfer_queue, cmd_pool, w, h, fmt, gen_mips, img_data_ptr, image, img_view, sampler);
+    PASS_ERROR(create_texture_2D(transfer_queue, cmd_pool, w, h, fmt, gen_mips, img_data_ptr, out_image, out_img_view, out_sampler));
 
     RAISE_ERROR_OK();
 }
 
 
-
-ERROR_TYPE vk_utils::create_image_2D(
+ERROR_TYPE vk_utils::create_texture_2D(
     VkQueue transfer_queue,
     VkCommandPool command_pool,
     uint32_t width,
@@ -117,10 +109,14 @@ ERROR_TYPE vk_utils::create_image_2D(
     VkFormat format,
     bool gen_mips,
     const void* data,
-    vk_utils::vma_image_handler& image,
-    vk_utils::image_view_handler& image_view,
-    vk_utils::sampler_handler& image_sampler)
+    vk_utils::vma_image_handler& out_image,
+    vk_utils::image_view_handler& out_image_view,
+    vk_utils::sampler_handler& out_image_sampler)
 {
+    vk_utils::vma_image_handler image;
+    vk_utils::image_view_handler image_view;
+    vk_utils::sampler_handler image_sampler;
+
     size_t pixel_size = 1;
     VkComponentMapping components;
 
@@ -133,8 +129,7 @@ ERROR_TYPE vk_utils::create_image_2D(
                 .r = VK_COMPONENT_SWIZZLE_R,
                 .g = VK_COMPONENT_SWIZZLE_R,
                 .b = VK_COMPONENT_SWIZZLE_R,
-                .a = VK_COMPONENT_SWIZZLE_ONE
-            };
+                .a = VK_COMPONENT_SWIZZLE_ONE};
             break;
         case VK_FORMAT_R8G8_SRGB:
             [[fallthrough]];
@@ -144,8 +139,7 @@ ERROR_TYPE vk_utils::create_image_2D(
                 .r = VK_COMPONENT_SWIZZLE_R,
                 .g = VK_COMPONENT_SWIZZLE_ZERO,
                 .b = VK_COMPONENT_SWIZZLE_ZERO,
-                .a = VK_COMPONENT_SWIZZLE_G
-            };
+                .a = VK_COMPONENT_SWIZZLE_G};
             break;
         case VK_FORMAT_R8G8B8_SRGB:
             [[fallthrough]];
@@ -155,8 +149,7 @@ ERROR_TYPE vk_utils::create_image_2D(
                 .r = VK_COMPONENT_SWIZZLE_R,
                 .g = VK_COMPONENT_SWIZZLE_G,
                 .b = VK_COMPONENT_SWIZZLE_B,
-                .a = VK_COMPONENT_SWIZZLE_ONE
-            };
+                .a = VK_COMPONENT_SWIZZLE_ONE};
             break;
         case VK_FORMAT_R8G8B8A8_SRGB:
             [[fallthrough]];
@@ -166,8 +159,7 @@ ERROR_TYPE vk_utils::create_image_2D(
                 .r = VK_COMPONENT_SWIZZLE_R,
                 .g = VK_COMPONENT_SWIZZLE_G,
                 .b = VK_COMPONENT_SWIZZLE_B,
-                .a = VK_COMPONENT_SWIZZLE_A
-            };
+                .a = VK_COMPONENT_SWIZZLE_A};
             break;
         default:
             RAISE_ERROR_FATAL(-1, "unsupported pixels format.");
@@ -176,7 +168,10 @@ ERROR_TYPE vk_utils::create_image_2D(
     const uint32_t mip_levels = gen_mips ? log2(std::max(width, height)) : 1;
 
     vk_utils::vma_buffer_handler staging_buffer{};
-    create_buffer(staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, width * height * pixel_size, data);
+
+    if (data != nullptr) {
+        create_buffer(staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, width * height * pixel_size, data);
+    }
 
     VkImageCreateInfo image_info{};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -443,17 +438,23 @@ ERROR_TYPE vk_utils::create_image_2D(
     vkQueueSubmit(transfer_queue, 1, &submit_info, fence);
     vkWaitForFences(vk_utils::context::get().device(), 1, fence, VK_TRUE, UINT64_MAX);
 
+    out_image = std::move(image);
+    out_image_view = std::move(image_view);
+    out_image_sampler = std::move(image_sampler);
+
     RAISE_ERROR_OK();
 }
 
 
 ERROR_TYPE vk_utils::create_buffer(
-    vk_utils::vma_buffer_handler& buffer,
+    vk_utils::vma_buffer_handler& out_buffer,
     VkBufferUsageFlags buffer_usage,
     VmaMemoryUsage memory_usage,
     uint32_t size,
     const void* data)
 {
+    vk_utils::vma_buffer_handler buffer;
+
     VkBufferCreateInfo buffer_info{};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer_info.pNext = nullptr;
@@ -467,7 +468,6 @@ ERROR_TYPE vk_utils::create_buffer(
     VmaAllocationCreateInfo alloc_info{};
     alloc_info.usage = memory_usage;
     alloc_info.flags = 0;
-
 
     if (const auto err = buffer.init(vk_utils::context::get().allocator(), &buffer_info, &alloc_info); err != VK_SUCCESS) {
         RAISE_ERROR_WARN(err, "cannot init buffer.");
@@ -484,6 +484,8 @@ ERROR_TYPE vk_utils::create_buffer(
             0,
             VK_WHOLE_SIZE);
     }
+
+    out_buffer = std::move(buffer);
 
     RAISE_ERROR_OK();
 }
@@ -529,4 +531,127 @@ bool vk_utils::check_linear_tiling_format(VkFormat req_fmt, VkFormatFeatureFlagB
     VkFormatProperties props;
     vkGetPhysicalDeviceFormatProperties(vk_utils::context::get().gpu(), req_fmt, &props);
     return props.linearTilingFeatures & features_flags;
+}
+
+
+ERROR_TYPE vk_utils::load_shader(
+    const char* shader_path,
+    vk_utils::shader_module_handler& handle,
+    VkShaderStageFlagBits& stage)
+{
+    struct shader_kind
+    {
+        shaderc_shader_kind shaderc_kind{};
+        const char* shaderc_string{};
+        VkShaderStageFlagBits vk_shader_stage{};
+    };
+
+    shader_kind curr_shader_kind{};
+
+    static std::unordered_map<const char*, shader_kind> kinds{
+        {".vert", {shaderc_shader_kind::shaderc_glsl_vertex_shader, "vs", VK_SHADER_STAGE_VERTEX_BIT}},
+        {".frag", {shaderc_shader_kind::shaderc_glsl_fragment_shader, "fs", VK_SHADER_STAGE_FRAGMENT_BIT}},
+        {".geom", {shaderc_shader_kind::shaderc_glsl_geometry_shader, "gs", VK_SHADER_STAGE_GEOMETRY_BIT}},
+        {".tesc", {shaderc_shader_kind::shaderc_glsl_tess_control_shader, "tesc", VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT}},
+        {".tese", {shaderc_shader_kind::shaderc_glsl_tess_evaluation_shader, "tese", VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT}},
+        {".comp", {shaderc_shader_kind::shaderc_glsl_compute_shader, "comp", VK_SHADER_STAGE_COMPUTE_BIT}},
+        {".mesh", {shaderc_shader_kind::shaderc_glsl_mesh_shader, "mesh", VK_SHADER_STAGE_MESH_BIT_NV}},
+        {".task", {shaderc_shader_kind::shaderc_glsl_task_shader, "task", VK_SHADER_STAGE_TASK_BIT_NV}},
+        {".rgen", {shaderc_shader_kind::shaderc_glsl_raygen_shader, "rgen", VK_SHADER_STAGE_RAYGEN_BIT_KHR}},
+        {".rint", {shaderc_shader_kind::shaderc_glsl_intersection_shader, "rint", VK_SHADER_STAGE_INTERSECTION_BIT_KHR}},
+        {".rahit", {shaderc_shader_kind::shaderc_glsl_anyhit_shader, "rahit", VK_SHADER_STAGE_ANY_HIT_BIT_KHR}},
+        {".rchit", {shaderc_shader_kind::shaderc_glsl_closesthit_shader, "rchit", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR}},
+        {".rmiss", {shaderc_shader_kind::shaderc_glsl_miss_shader, "rmiss", VK_SHADER_STAGE_MESH_BIT_NV}},
+        {".rcall", {shaderc_shader_kind::shaderc_glsl_callable_shader, "rcall", VK_SHADER_STAGE_CALLABLE_BIT_KHR}}};
+
+    bool shader_kind_found = false;
+
+    for (const auto& [stage_name, kind_val] : kinds) {
+        if (strstr(shader_path, stage_name) != nullptr) {
+            curr_shader_kind = kind_val;
+            shader_kind_found = true;
+            break;
+        }
+    }
+
+    if (!shader_kind_found) {
+        RAISE_ERROR_WARN(-1, "cannot find actual shader kind.");
+    }
+
+    std::unique_ptr<FILE, std::function<void(FILE*)>> f_handle(
+        nullptr, [](FILE* f) { fclose(f); });
+
+    bool is_spv = strstr(shader_path, ".spv") != nullptr;
+
+    if (is_spv) {
+        f_handle.reset(fopen(shader_path, "rb"));
+    } else {
+        f_handle.reset(fopen(shader_path, "r"));
+    }
+
+    if (f_handle == nullptr) {
+        RAISE_ERROR_WARN(-1, "cannot load shader file.");
+    }
+
+    fseek(f_handle.get(), 0L, SEEK_END);
+    auto size = ftell(f_handle.get());
+    fseek(f_handle.get(), 0L, SEEK_SET);
+
+    if (is_spv) {
+        std::vector<char> code(size);
+        fread(code.data(), 1, size, f_handle.get());
+        PASS_ERROR(create_shader_module(reinterpret_cast<const uint32_t*>(code.data()), code.size(), handle));
+    } else {
+        static shaderc::Compiler compiler{};
+
+        std::string source;
+        source.resize(size);
+        fread(source.data(), 1, size, f_handle.get());
+
+        shaderc::CompileOptions options;
+
+#ifndef NDEBUG
+        options.SetOptimizationLevel(
+            shaderc_optimization_level_zero);
+        options.SetGenerateDebugInfo();
+#else
+        options.SetOptimizationLevel(
+            shaderc_optimization_level_performance);
+#endif
+        shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(source, curr_shader_kind.shaderc_kind, curr_shader_kind.shaderc_string, options);
+        if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
+            LOG_ERROR(result.GetErrorMessage());
+            RAISE_ERROR_WARN(-1, "cannot load shader file.");
+        }
+
+        std::vector<uint32_t> shaderSPRV;
+        shaderSPRV.assign(result.begin(), result.end());
+        PASS_ERROR(create_shader_module(shaderSPRV.data(), shaderSPRV.size() * sizeof(uint32_t), handle));
+    }
+
+    stage = curr_shader_kind.vk_shader_stage;
+    RAISE_ERROR_OK();
+}
+
+
+ERROR_TYPE vk_utils::create_shader_module(
+    const uint32_t* code,
+    uint32_t code_size,
+    vk_utils::shader_module_handler& handle)
+{
+    VkShaderModuleCreateInfo shader_module_info{};
+    shader_module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shader_module_info.pNext = nullptr;
+    shader_module_info.pCode = code;
+    shader_module_info.codeSize = code_size;
+
+    vk_utils::shader_module_handler module;
+
+    if (module.init(vk_utils::context::get().device(), &shader_module_info) != VK_SUCCESS) {
+        RAISE_ERROR_WARN(-1, "cannot create shader module.");
+    }
+
+    handle = std::move(module);
+
+    RAISE_ERROR_OK();
 }

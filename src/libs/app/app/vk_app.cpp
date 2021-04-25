@@ -2,8 +2,11 @@
 
 #include "vk_app.hpp"
 
-#include <GLFW/glfw3.h>
 #include <vk_utils/context.hpp>
+
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+
 #include <algorithm>
 
 using namespace app;

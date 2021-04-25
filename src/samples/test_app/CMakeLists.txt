@@ -3,11 +3,7 @@ make_bin(
     NAME
         test_app
     DEPENDS
-        glfw
-        shaderc
         glm_
-        stb
-        tinyobjloader
         ${VK_DEPS_LIBS}
         vk_utils
         base_app
