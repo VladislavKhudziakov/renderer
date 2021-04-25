@@ -17,5 +17,6 @@ make_bin(
         shaderc
         stb
         tinyobjloader
+        glm_
         errors
         VulkanMemoryAllocator)

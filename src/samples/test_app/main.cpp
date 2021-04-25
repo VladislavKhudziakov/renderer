@@ -6,6 +6,7 @@
 #include <vk_utils/context.hpp>
 #include <vk_utils/tools.hpp>
 #include <vk_utils/obj_loader.hpp>
+#include <vk_utils/camera.hpp>
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/gtc/matrix_transform.hpp>
@@ -34,6 +35,7 @@ struct shader_group
 struct global_ubo
 {
     glm::mat4 projection = glm::identity<glm::mat4>();
+    glm::mat4 view_projection = glm::identity<glm::mat4>();
     glm::mat4 view = glm::identity<glm::mat4>();
     glm::mat4 model = glm::identity<glm::mat4>();
     glm::mat4 mvp = glm::identity<glm::mat4>();
@@ -97,14 +99,17 @@ protected:
         static global_ubo ubo_data{};
 
         auto model = glm::identity<glm::mat4>();
-        model = glm::translate(model, {0.0f, 0.0f, 0.0f});
         model = glm::rotate(model, glm::radians(-90.0f), glm::vec3{1.0f, 0.0f, 0.0f});
         model = glm::rotate(model, glm::radians(angle), glm::vec3{0.0f, 0.0f, 1.0f});
+
+        m_camera.eye_position = {0, 1, -2};
+        m_camera.target_position = {0, 0, 0};
+        m_camera.fov = 90.0f;
+        m_camera.update(m_swapchain_data.swapchain_info->imageExtent.width, m_swapchain_data.swapchain_info->imageExtent.height);
         ubo_data.model = model;
-
-        ubo_data.projection = glm::perspectiveFov(glm::radians(90.0f), float(m_swapchain_data.swapchain_info->imageExtent.width), float(m_swapchain_data.swapchain_info->imageExtent.height), 0.01f, 100.0f);
-
-        ubo_data.view = glm::lookAt(glm::vec3{0.0f, 0.0f, -3.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+        ubo_data.view_projection = m_camera.view_proj_matrix;
+        ubo_data.projection = m_camera.proj_matrix;
+        ubo_data.view = m_camera.view_matrix;
         ubo_data.mvp = ubo_data.projection * ubo_data.view * ubo_data.model;
 
         void* mapped_data;
@@ -746,6 +751,7 @@ protected:
     std::vector<vk_utils::framebuffer_handler> m_main_pass_framebuffers{};
 
     vk_utils::cmd_buffers_handler m_command_buffers{};
+    vk_utils::camera m_camera;
 };
 
 

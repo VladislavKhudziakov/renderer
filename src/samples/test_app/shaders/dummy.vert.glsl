@@ -8,6 +8,7 @@ layout (location = 2) in vec2 a_uv;
 
 layout (set = 0, binding = 0) uniform renderer_global {
     mat4 u_projectopn;
+    mat4 u_view_porj;
     mat4 u_view;
     mat4 u_model;
     mat4 u_mvp;

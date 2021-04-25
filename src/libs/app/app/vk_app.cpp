@@ -307,34 +307,41 @@ void vk_app::window_resized_callback(GLFWwindow* window, int w, int h)
 
 ERROR_TYPE vk_app::begin_frame()
 {
-    auto result = vkAcquireNextImageKHR(
-        vk_utils::context::get().device(),
-        m_swapchain_data.swapchain,
-        UINT64_MAX,
-        m_swapchain_data.image_acquired_semaphores[m_swapchain_data.current_frame],
-        nullptr,
-        &m_swapchain_data.current_image);
+    VkResult result;
+    size_t acquire_image_tries{0};
 
-    while (result != VK_SUCCESS) {
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            vkDeviceWaitIdle(vk_utils::context::get().device());
-            HANDLE_ERROR(create_swapchain());
-            HANDLE_ERROR(request_swapchain_images());
-            HANDLE_ERROR(on_swapchain_recreated());
-            result = vkAcquireNextImageKHR(
-                vk_utils::context::get().device(),
-                m_swapchain_data.swapchain,
-                UINT64_MAX,
-                m_swapchain_data.image_acquired_semaphores[m_swapchain_data.current_frame],
-                nullptr,
-                &m_swapchain_data.current_image);
-        } else {
-            RAISE_ERROR_FATAL(-1, "cannot acquire image.");
+    do {
+        result = vkAcquireNextImageKHR(
+            vk_utils::context::get().device(),
+            m_swapchain_data.swapchain,
+            UINT64_MAX,
+            m_swapchain_data.image_acquired_semaphores[m_swapchain_data.current_frame],
+            nullptr,
+            &m_swapchain_data.current_image);
+
+        if (result != VK_SUCCESS) {
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+                vkDeviceWaitIdle(vk_utils::context::get().device());
+                HANDLE_ERROR(create_swapchain());
+                HANDLE_ERROR(request_swapchain_images());
+                HANDLE_ERROR(on_swapchain_recreated());
+            } else {
+                RAISE_ERROR_FATAL(-1, "cannot acquire image.");
+            }
         }
+        acquire_image_tries++;
+    } while (result != VK_SUCCESS && acquire_image_tries < 100);
 
-        RAISE_ERROR_OK();
+    if (acquire_image_tries >= 100) {
+        RAISE_ERROR_FATAL(-1, "image acquire tries exceed.");
     }
 
+    RAISE_ERROR_OK();
+}
+
+
+ERROR_TYPE vk_app::finish_frame(VkCommandBuffer cmd_buffer)
+{
     if (m_swapchain_data.frames_in_flight_fences[m_swapchain_data.current_image] != nullptr) {
         vkWaitForFences(
             vk_utils::context::get().device(),
@@ -346,12 +353,6 @@ ERROR_TYPE vk_app::begin_frame()
 
     m_swapchain_data.frames_in_flight_fences[m_swapchain_data.current_image] = m_swapchain_data.render_finished_fences[m_swapchain_data.current_frame];
 
-    RAISE_ERROR_OK();
-}
-
-
-ERROR_TYPE vk_app::finish_frame(VkCommandBuffer cmd_buffer)
-{
     VkSubmitInfo submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit_info.pNext = nullptr;
