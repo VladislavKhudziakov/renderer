@@ -19,13 +19,14 @@ ERROR_TYPE vk_utils::camera::update(float extent_width, float extent_height)
             RAISE_ERROR_WARN(-1, "unsupported porjection type.");
             break;
     }
-
     view_matrix = glm::lookAt(eye_position, target_position, up);
     view_proj_matrix = proj_matrix * view_matrix;
+    RAISE_ERROR_OK();
 }
 
 
 ERROR_TYPE vk_utils::camera::init(vk_utils::camera::type type)
 {
     m_curr_type = type;
+    RAISE_ERROR_OK();
 }

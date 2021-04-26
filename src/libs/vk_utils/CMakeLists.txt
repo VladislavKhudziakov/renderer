@@ -20,3 +20,8 @@ make_bin(
         glm_
         errors
         VulkanMemoryAllocator)
+
+
+if (${RENDERER_ENABLE_VALIDATION_LAYERS})
+    target_compile_definitions(vk_utils PRIVATE -DUSE_VALIDATION_LAYERS)
+endif()

@@ -6,7 +6,7 @@
 #include <string>
 #include <functional>
 
-#ifndef NDEBUG
+#ifndef NO_EXCEPTIONS
     #include <stdexcept>
     #define ERROR_TYPE void
     #define RAISE_ERROR_WARN(code, m) throw errors::error(errors::WARN, code, std::string(m) + " in file " + __FILE__ " at line " + std::to_string(__LINE__))
@@ -42,7 +42,7 @@
     #define RAISE_ERROR_OK() return errors::OK
     #define HANDLE_ERROR(code) errors::handle_error(code)
     #define PASS_ERROR(code)                              \
-        if (const auto err = (code); err != errors::OK) { \
+        if (const auto err = code; err != errors::OK) { \
             return err;                                   \
         }
 #endif
@@ -56,7 +56,7 @@ namespace errors
         FATAL
     };
 
-#ifndef NDEBUG
+#ifndef NO_EXCEPTIONS
     class error : public std::exception
     {
     public:
@@ -74,8 +74,7 @@ namespace errors
     struct error
     {
         error() = default;
-        ~error() = default;
-        error(state err_state, int32_t code = 0, const std::string& msg = "");
+        error(state err_state, int32_t code = 0, const std::string& msg = std::string(""));
 
         operator state() const
         {
@@ -87,10 +86,7 @@ namespace errors
         std::string message;
     };
 
-    void handle_error(errors::error);
+    void handle_error(const errors::error& e);
 #endif
-
-    ERROR_TYPE handle_error_code(int32_t code, bool (*on_error)(int32_t code) = nullptr, const char* err_msg = nullptr);
-    ERROR_TYPE handle_error_code(int32_t code, const std::function<bool(int32_t)>&, const char* err_msg = nullptr);
 
 } // namespace errors

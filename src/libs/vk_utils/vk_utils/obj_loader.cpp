@@ -324,7 +324,7 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_materials(
         loaded_textures_names.emplace_back(s.c_str());
 
         texture new_texture{};
-        PASS_ERROR(load_texture_2D(s.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+        HANDLE_ERROR(load_texture_2D(s.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
         loaded_textures.emplace_back(std::move(new_texture));
 
         return static_cast<decltype(i)>(loaded_textures.size() - 1);

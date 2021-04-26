@@ -278,7 +278,7 @@ ERROR_TYPE vk_utils::context::init_instance(const char* app_name, const vk_utils
     VkInstanceCreateInfo instance_info{};
     instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instance_info.pNext = nullptr;
-#ifndef NDEBUG
+#ifdef USE_VALIDATION_LAYERS
     instance_info.pNext = &messenger_create_info;
 #else
     instance_info.pNext = nullptr;
@@ -315,7 +315,7 @@ ERROR_TYPE vk_utils::context::init_instance(const char* app_name, const vk_utils
     merge_extensions_list(
         instance_extensions_props,
         implicit_required_instance_extensions,
-#ifndef NDEBUG
+#ifdef USE_VALIDATION_LAYERS
         std::size(implicit_required_instance_extensions),
 #else
         0,
@@ -354,7 +354,7 @@ ERROR_TYPE vk_utils::context::init_instance(const char* app_name, const vk_utils
     merge_layers_list(
         instance_layer_props,
         implicit_required_instance_layers,
-#ifndef NDEBUG
+#ifdef USE_VALIDATION_LAYERS
         std::size(implicit_required_instance_layers),
 #else
         0,
@@ -376,8 +376,8 @@ ERROR_TYPE vk_utils::context::init_instance(const char* app_name, const vk_utils
 
 ERROR_TYPE vk_utils::context::init_debug_messenger(const vk_utils::context::context_init_info& info)
 {
-#ifdef NDEBUG
-    return errors::OK;
+#ifndef USE_VALIDATION_LAYERS
+    RAISE_ERROR_OK();
 #else
     auto messenger_create_info = get_debug_messenger_create_info();
 
@@ -489,7 +489,7 @@ ERROR_TYPE vk_utils::context::init_device(const context_init_info& context_init_
     merge_layers_list(
         device_layers_props,
         implicit_required_device_layers,
-#ifndef NDEBUG
+#ifdef USE_VALIDATION_LAYERS
         std::size(implicit_required_device_layers),
 #else
         0,

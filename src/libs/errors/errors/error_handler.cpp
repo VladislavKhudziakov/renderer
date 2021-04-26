@@ -5,7 +5,7 @@
 #include <logger/log.hpp>
 #include <cassert>
 
-#ifndef NDEBUG
+#ifndef NO_EXCEPTIONS
 errors::error::error(state err_state, int32_t code, const std::string& msg)
     : std::exception()
     , err_state(err_state)
@@ -26,7 +26,7 @@ errors::error::error(errors::state state, int32_t code, const std::string& msg)
 {
 }
 
-void errors::handle_error(errors::error e)
+void errors::handle_error(const errors::error& e)
 {
     switch (e.err_state) {
         case OK:
@@ -41,33 +41,3 @@ void errors::handle_error(errors::error e)
     }
 }
 #endif
-
-ERROR_TYPE errors::handle_error_code(int32_t code, bool (*on_error)(int32_t), const char* err_msg)
-{
-    if (code != 0) {
-        if (on_error != nullptr) {
-            if (on_error(code)) {
-                RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
-            } else {
-                RAISE_ERROR_OK();
-            }
-        } else {
-            RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
-        }
-    }
-}
-
-ERROR_TYPE errors::handle_error_code(int32_t code, const std::function<bool(int32_t)>& on_error, const char* err_msg)
-{
-    if (code != 0) {
-        if (on_error) {
-            if (on_error(code)) {
-                RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
-            } else {
-                RAISE_ERROR_OK();
-            }
-        } else {
-            RAISE_ERROR_FATAL(code, err_msg != nullptr ? err_msg : "invalid error code. " + std::to_string(code));
-        }
-    }
-}

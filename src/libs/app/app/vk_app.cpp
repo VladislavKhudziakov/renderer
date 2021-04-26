@@ -54,7 +54,7 @@ ERROR_TYPE vk_app::run_main_loop()
 {
     while (!glfwWindowShouldClose(m_window)) {
         glfwPollEvents();
-        draw_frame();
+        PASS_ERROR(draw_frame());
     }
 
     vkDeviceWaitIdle(vk_utils::context::get().device());
@@ -141,8 +141,9 @@ ERROR_TYPE vk_app::create_swapchain()
                     m_surface_capabilities.maxImageCount);
         }
 
-        PASS_ERROR(errors::handle_error_code(
-            m_swapchain_data.swapchain.reset(vk_utils::context::get().device(), &*m_swapchain_data.swapchain_info)));
+        if (m_swapchain_data.swapchain.reset(vk_utils::context::get().device(), &*m_swapchain_data.swapchain_info) != VK_SUCCESS) {
+            RAISE_ERROR_FATAL(-1, "cannot reset swapchain.");
+        }
 
         RAISE_ERROR_OK();
     }
@@ -226,8 +227,10 @@ ERROR_TYPE vk_app::create_swapchain()
     m_swapchain_data.swapchain_info->compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     m_swapchain_data.swapchain_info->clipped = VK_TRUE;
 
-    PASS_ERROR(errors::handle_error_code(
-        m_swapchain_data.swapchain.init(vk_utils::context::get().device(), &*m_swapchain_data.swapchain_info)));
+    if (m_swapchain_data.swapchain.init(vk_utils::context::get().device(), &*m_swapchain_data.swapchain_info)) {
+        RAISE_ERROR_WARN(-1, "cannot create swapchain.");
+    }
+    
 
     RAISE_ERROR_OK();
 }
@@ -269,13 +272,10 @@ ERROR_TYPE vk_app::request_swapchain_images()
     for (int i = 0; i < images_count; ++i) {
         img_view_create_info.image = m_swapchain_data.swapchain_images[i];
         auto& img_view = m_swapchain_data.swapchain_images_views.emplace_back();
-        HANDLE_ERROR(errors::handle_error_code(
-            img_view.init(vk_utils::context::get().device(), &img_view_create_info),
-            [this](int32_t code) {
-                m_swapchain_data.swapchain_images.clear();
-                m_swapchain_data.swapchain_images_views.clear();
-                return true;
-            }));
+
+        if (img_view.init(vk_utils::context::get().device(), &img_view_create_info) != VK_SUCCESS) {
+            RAISE_ERROR_FATAL(-1, "cannot init swapchain image view.");
+        }
     }
 
     RAISE_ERROR_OK();
@@ -376,7 +376,7 @@ ERROR_TYPE vk_app::finish_frame(VkCommandBuffer cmd_buffer)
         &submit_info,
         m_swapchain_data.render_finished_fences[m_swapchain_data.current_frame]);
 
-    VkResult result;
+    VkResult result{};
     VkPresentInfoKHR present_info{};
     present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     present_info.pNext = nullptr;
@@ -392,18 +392,17 @@ ERROR_TYPE vk_app::finish_frame(VkCommandBuffer cmd_buffer)
 
     vkQueuePresentKHR(vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), &present_info);
 
-    PASS_ERROR(errors::handle_error_code(
-        result,
-        [this](int32_t err_code) {
-            if (err_code == VK_ERROR_OUT_OF_DATE_KHR || err_code == VK_SUBOPTIMAL_KHR) {
-                vkDeviceWaitIdle(vk_utils::context::get().device());
-                create_swapchain();
-                request_swapchain_images();
-                HANDLE_ERROR(on_swapchain_recreated());
-                return false;
-            }
-            return true;
-        }));
+    if (result != VK_SUCCESS) {
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+            vkDeviceWaitIdle(vk_utils::context::get().device());
+            HANDLE_ERROR(create_swapchain());
+            HANDLE_ERROR(request_swapchain_images());
+            HANDLE_ERROR(on_swapchain_recreated());
+            RAISE_ERROR_OK();
+        } else {
+            RAISE_ERROR_WARN(-1, "queue present failed.");
+        }
+    }
 
     m_swapchain_data.current_frame = (m_swapchain_data.current_frame + 1) % m_swapchain_data.frames_count;
 

@@ -7,3 +7,8 @@ make_bin(
         STATIC
     DEPENDS
         logger)
+
+
+if (${RENDERER_NO_EXCEPTIONS})
+    target_compile_definitions(errors PUBLIC -DNO_EXCEPTIONS)
+endif()
