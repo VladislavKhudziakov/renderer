@@ -1,9 +1,16 @@
 #include "lib.hpp"
 
+
 dummy_obj_viewer_app::dummy_obj_viewer_app(const char* app_name, int argc, const char** argv)
     : vk_app(app_name, argc, argv)
 {
+    m_camera.eye_position = {0, 1, -2};
+    m_camera.target_position = {0, 0, 0};
+    m_camera.fov = 90.0f;
 }
+
+
+
 ERROR_TYPE dummy_obj_viewer_app::on_vulkan_initialized()
 {
     if (m_app_info.argc <= 1) {
@@ -39,24 +46,84 @@ ERROR_TYPE dummy_obj_viewer_app::on_swapchain_recreated()
 }
 
 
+ERROR_TYPE dummy_obj_viewer_app::on_mouse_scroll(double x, double y)
+{
+    auto dir = glm::normalize(m_camera.target_position - m_camera.eye_position);
+    m_camera.eye_position += dir * float(y) * 0.05f;
+    return vk_app::on_mouse_scroll(x, y);
+}
+
+
+ERROR_TYPE dummy_obj_viewer_app::on_mouse_button(int button, int action, int mode)
+{
+    if (button == VK_APP_MOUSE_LEFT) {
+        if (action == VK_APP_PRESS) {
+            m_state &= ~MODEL_RELEASE_BIT;
+            m_state |= MODEL_MOUNT_BIT;
+            LOG_INFO("MOUSE PRESS");
+        } else {
+            m_state &= ~MODEL_MOUNT_BIT;
+            m_state |= MODEL_RELEASE_BIT;
+            LOG_INFO("MOUSE RELEASE");
+        }
+    }
+    
+    return vk_app::on_mouse_button(button, action, mode);
+}
+
+ERROR_TYPE dummy_obj_viewer_app::on_mouse_moved(uint64_t x, uint64_t y)
+{
+    static glm::vec2 last_pos{-1, -1};
+
+    if (m_state & MODEL_MOUNT_BIT) {
+        if (x != last_pos.x) {
+            m_state |=  (x - last_pos.x > 0 ? MODEL_ROTATE_POSITIVE_X_BIT : MODEL_ROTATE_NEGATIVE_X_BIT);
+        }
+
+        if (y != last_pos.y) {
+            m_state |= (y - last_pos.y > 0 ? MODEL_ROTATE_POSITIVE_Y_BIT : MODEL_ROTATE_NEGATIVE_Y_BIT);
+        }
+    }
+
+    last_pos = {x, y};
+    
+    return vk_app::on_mouse_moved(x, y);
+}
+
+
 ERROR_TYPE dummy_obj_viewer_app::draw_frame()
 {
-    static float angle = 0.0;
-    angle += 0.01;
-
-    if (angle >= 360.0f) {
-        angle = 0.0f;
-    }
 
     static global_ubo ubo_data{};
 
     auto model = glm::identity<glm::mat4>();
-    model = glm::rotate(model, glm::radians(-90.0f), glm::vec3{1.0f, 0.0f, 0.0f});
-    model = glm::rotate(model, glm::radians(angle), glm::vec3{0.0f, 0.0f, 1.0f});
 
-    m_camera.eye_position = {0, 1, -2};
-    m_camera.target_position = {0, 0, 0};
-    m_camera.fov = 90.0f;
+    auto view_transform = glm::identity<glm::mat4>();
+
+    if (m_state & MODEL_ROTATE_POSITIVE_Y_BIT) {
+        m_state &= ~MODEL_ROTATE_POSITIVE_Y_BIT;
+        view_transform = glm::rotate(view_transform, glm::radians(0.5f), {1.0f, 0.0f, 0.0f});
+    }
+
+    if (m_state & MODEL_ROTATE_NEGATIVE_Y_BIT) {
+        m_state &= ~MODEL_ROTATE_NEGATIVE_Y_BIT;
+        view_transform = glm::rotate(view_transform, glm::radians(-0.5f), {1.0f, 0.0f, 0.0f});
+    }
+
+    //if (m_state & MODEL_ROTATE_POSITIVE_X_BIT) {
+    //    m_state &= ~MODEL_ROTATE_POSITIVE_X_BIT;
+    //    view_transform = glm::rotate(view_transform, glm::radians(0.5f), {0.0f, 1.0f, 0.0f});
+    //}
+
+    //if (m_state & MODEL_ROTATE_NEGATIVE_X_BIT) {
+    //    m_state &= ~MODEL_ROTATE_NEGATIVE_X_BIT;
+    //    view_transform = glm::rotate(view_transform, glm::radians(-0.5f), {0.0f, 1.0f, 0.0f});
+    //}
+
+    
+
+    m_camera.eye_position = glm::mat3(view_transform) * m_camera.eye_position;
+
     m_camera.update(m_swapchain_data.swapchain_info->imageExtent.width, m_swapchain_data.swapchain_info->imageExtent.height);
     ubo_data.model = model;
     ubo_data.view_projection = m_camera.view_proj_matrix;

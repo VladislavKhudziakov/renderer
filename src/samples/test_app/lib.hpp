@@ -49,8 +49,23 @@ public:
 
 
 protected:
+    enum app_state
+    {
+        MODEL_MOUNT_BIT = 1,
+        MODEL_ROTATE_POSITIVE_X_BIT = 2,
+        MODEL_ROTATE_NEGATIVE_X_BIT = 4,
+        MODEL_ROTATE_POSITIVE_Y_BIT = 8,
+        MODEL_ROTATE_NEGATIVE_Y_BIT = 16,
+        MODEL_RELEASE_BIT = 32
+    };
+
     ERROR_TYPE on_vulkan_initialized() override;
     ERROR_TYPE on_swapchain_recreated() override;
+    
+    ERROR_TYPE on_mouse_scroll(double, double) override;
+    ERROR_TYPE on_mouse_button(int, int, int) override;
+    ERROR_TYPE on_mouse_moved(uint64_t x, uint64_t y) override;
+
     ERROR_TYPE draw_frame() override;
     ERROR_TYPE on_window_size_changed(int w, int h) override;
     ERROR_TYPE init_dummy_shaders(
@@ -101,4 +116,7 @@ protected:
 
     vk_utils::cmd_buffers_handler m_command_buffers{};
     vk_utils::camera m_camera;
+
+    glm::vec2 m_mouse_pos{0, 0};
+    int m_state{0};
 };

@@ -40,6 +40,10 @@ ERROR_TYPE vk_app::init_window()
     glfwSetWindowUserPointer(m_window, this);
 
     glfwSetWindowSizeCallback(m_window, window_resized_callback);
+    glfwSetMouseButtonCallback(m_window, mouse_button_callback);
+    glfwSetCursorPosCallback(m_window, cursor_pos_callback);
+    glfwSetCursorEnterCallback(m_window, cursor_enter_callback);
+    glfwSetScrollCallback(m_window, scroll_callback);
 
     if (m_window == nullptr) {
         RAISE_ERROR_FATAL(-1, "Failed to create window.");
@@ -302,6 +306,33 @@ void vk_app::window_resized_callback(GLFWwindow* window, int w, int h)
 {
     auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
     self->on_window_size_changed(w, h);
+}
+
+
+void app::vk_app::mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+    auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
+    self->on_mouse_button(button, action, mods);
+}
+
+
+void app::vk_app::cursor_pos_callback(GLFWwindow* window, double x, double y)
+{
+    auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
+    self->on_mouse_moved(static_cast<uint64_t>(x), static_cast<uint64_t>(y));
+}
+
+
+void app::vk_app::cursor_enter_callback(GLFWwindow* window, int entered)
+{
+    auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
+    self->on_mouse_enter(static_cast<bool>(entered));
+}
+
+void app::vk_app::scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
+{
+    auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
+    self->on_mouse_scroll(xoffset, yoffset);
 }
 
 
