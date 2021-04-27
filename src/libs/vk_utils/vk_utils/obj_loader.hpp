@@ -6,6 +6,7 @@
 #include <vector>
 #include <array>
 #include <variant>
+#include <unordered_map>
 
 namespace tinyobj
 {
@@ -36,6 +37,12 @@ namespace vk_utils
             PHONG_ALPHA,
             PHONG_REFLECTION,
             PHONG_SIZE,
+        };
+
+        enum obj_pbr_textures
+        {
+            PBR_DIFFUSE,
+            PBR_SIZE,
         };
 
         struct obj_phong_material
@@ -78,7 +85,8 @@ namespace vk_utils
         struct  obj_model_info
         {
             obj_render_technique_type model_render_technique = PHONG;
-            std::vector<std::array<const char*, PHONG_SIZE>> model_textures{};
+            std::unordered_map<std::string, std::array<std::string, PHONG_SIZE>> phong_textures;
+            std::unordered_map<std::string, std::array<std::string, PBR_SIZE>> pbr_textures;
         };
 
         ERROR_TYPE load_model(

@@ -1,5 +1,5 @@
 
-#include "lib.hpp"
+#include "dummy_obj_viewer_app.hpp"
 
 
 int main(int argc, const char** argv)

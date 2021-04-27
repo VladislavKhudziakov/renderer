@@ -301,18 +301,16 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_materials(
         return tex_it == loaded_textures_names.end() ? -1 : std::distance(loaded_textures_names.begin(), tex_it);
     };
 
-    for (const auto& tex : model_info.model_textures) {
-        for (auto tex_path : tex) {
-            if (tex_path != nullptr && get_tex_index(tex_path) < 0) {
+    for (const auto& [tex_name, tex_val] : model_info.phong_textures) {
+        for (auto tex_path : tex_val) {
+            if (!tex_path.empty() && get_tex_index(tex_path.c_str()) < 0) {
                 texture new_texture{};
-                PASS_ERROR(load_texture_2D(tex_path, transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
-                loaded_textures_names.emplace_back(tex_path);
+                PASS_ERROR(load_texture_2D(tex_path.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+                loaded_textures_names.emplace_back(tex_path.c_str());
                 loaded_textures.emplace_back(std::move(new_texture));
             }
         }
     }
-
-    const obj_phong_material* last_material{nullptr};
 
     auto add_material_texture = [&get_tex_index, &loaded_textures_names, &loaded_textures, transfer_queue, command_pool](const std::string& s) {
         const auto i = get_tex_index(s.c_str());
@@ -333,25 +331,23 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_materials(
     for (size_t i = 0; i < shapes.size(); ++i) {
         obj_phong_material curr_material{};
 
-        if (i < model_info.model_textures.size()) {
-            for (int j = 0; j < model_info.model_textures[i].size(); ++j) {
-                if (model_info.model_textures[i][j] != nullptr) {
-                    curr_material.material_textures[j] = get_tex_index(model_info.model_textures[i][j]);
-                }
-                model.sub_geometries[i].material = std::move(curr_material);
+        const auto mesh_phong_mat_it = model_info.phong_textures.find(shapes[i].name);
 
-                last_material = &std::get<obj_phong_material>(model.sub_geometries[i].material);
+        if (mesh_phong_mat_it != model_info.phong_textures.end()) {
+            for (int j = 0; j < mesh_phong_mat_it->second.size(); ++j) {
+                if (!mesh_phong_mat_it->second[j].empty()) {
+                    curr_material.material_textures[j] = get_tex_index(mesh_phong_mat_it->second[j].c_str());
+                }
             }
+            model.sub_geometries[i].material = std::move(curr_material);
             continue;
         }
 
         auto& shape = shapes[i];
 
         if (shape.mesh.material_ids.front() < 0) {
-            if (last_material == nullptr) {
-                RAISE_ERROR_FATAL(-1, "cannot load any material.");
-            }
-            model.sub_geometries[i].material = *last_material;
+            LOG_WARN("sub geometry ", shapes[i].name, " have no attached material.");
+            continue;
         } else {
             auto& obj_mat = materials[shape.mesh.material_ids.front()];
             curr_material.material_textures[PHONG_DIFFUSE] = add_material_texture(obj_mat.diffuse_texname);

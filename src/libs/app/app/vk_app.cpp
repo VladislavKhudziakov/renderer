@@ -234,7 +234,6 @@ ERROR_TYPE vk_app::create_swapchain()
     if (m_swapchain_data.swapchain.init(vk_utils::context::get().device(), &*m_swapchain_data.swapchain_info)) {
         RAISE_ERROR_WARN(-1, "cannot create swapchain.");
     }
-    
 
     RAISE_ERROR_OK();
 }

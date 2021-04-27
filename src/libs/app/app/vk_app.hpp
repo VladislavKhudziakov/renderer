@@ -3,6 +3,7 @@
 #include <app/base_app.hpp>
 
 #include <vk_utils/handlers.hpp>
+
 #include <optional>
 
 class GLFWwindow;

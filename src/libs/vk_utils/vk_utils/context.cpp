@@ -9,12 +9,11 @@
 
 namespace
 {
-    template <typename... LogArgs>
-    void log(const char* fmt, LogArgs&& ...args)
+    template<typename... LogArgs>
+    void log(const char* fmt, LogArgs&&... args)
     {
-        constexpr const char* ignore[] {
-            "vmaFlushAllocation"
-        };
+        constexpr const char* ignore[]{
+            "vmaFlushAllocation"};
 
         for (const auto* ignored : ignore) {
             if (strstr(fmt, ignored) != nullptr) {
@@ -24,12 +23,12 @@ namespace
 
         printf(fmt, std::forward<LogArgs>(args)...);
     }
-}
+} // namespace
 #ifndef VMA_IMPLEMENTATION
     #define VMA_IMPLEMENTATION
     #ifndef NDEBUG
-//            #define VMA_DEBUG_LOG(format, ...) log(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
-//            printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
+    //            #define VMA_DEBUG_LOG(format, ...) log(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
+    //            printf(LOGGER_COLOR_MODIFIER_FG_BLUE "[DEBUG] [VMA] " format LOGGER_COLOR_MODIFIER_FG_DEFAULT "\n" __VA_OPT__(, ) __VA_ARGS__);
     #endif
     #include <VulkanMemoryAllocator/src/vk_mem_alloc.h>
 #endif
@@ -505,10 +504,10 @@ ERROR_TYPE vk_utils::context::init_device(const context_init_info& context_init_
             return info.queueFamilyIndex == ctx->m_queue_families_indices[i].index;
         });
         if (it != out_infos.end()) {
-            it->queueCount = std::min(it->queueCount +1, ctx->m_queue_families_indices[i].max_queue_count);
+            it->queueCount = std::min(it->queueCount + 1, ctx->m_queue_families_indices[i].max_queue_count);
             ctx->m_queue_families_indices[i].queue_index = it->queueCount - 1;
         } else {
-            out_infos.push_back(VkDeviceQueueCreateInfo {
+            out_infos.push_back(VkDeviceQueueCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                 .pNext = nullptr,
                 .flags = 0,

@@ -1,18 +1,20 @@
-#include "lib.hpp"
+#include "dummy_obj_viewer_app.hpp"
+
+#include <vk_utils/tools.hpp>
+#include <vk_utils/context.hpp>
+
+#include <algorithm>
 
 
 dummy_obj_viewer_app::dummy_obj_viewer_app(const char* app_name, int argc, const char** argv)
-    : vk_app(app_name, argc, argv)
+    : base_obj_viewer_app(app_name, argc, argv)
 {
-    m_camera.eye_position = {0, 1, -2};
-    m_camera.target_position = {0, 0, 0};
-    m_camera.fov = 90.0f;
 }
-
 
 
 ERROR_TYPE dummy_obj_viewer_app::on_vulkan_initialized()
 {
+    PASS_ERROR(base_obj_viewer_app::on_vulkan_initialized());
     if (m_app_info.argc <= 1) {
         RAISE_ERROR_FATAL(-1, "invalid arguments count.");
     }
@@ -25,8 +27,7 @@ ERROR_TYPE dummy_obj_viewer_app::on_vulkan_initialized()
 
     PASS_ERROR(init_main_render_pass());
     PASS_ERROR(init_main_frame_buffers());
-    PASS_ERROR(init_dummy_model_resources(
-        m_app_info.argv[1], textures_list, m_app_info.argc - 2));
+    PASS_ERROR(init_dummy_shaders(m_model, m_ubo, m_dummy_shader_group));
     PASS_ERROR(record_obj_model_dummy_draw_commands(
         m_model, m_dummy_shader_group, m_command_pool, m_command_buffers, m_pipelines_layout, m_graphics_pipelines));
     RAISE_ERROR_OK();
@@ -46,97 +47,9 @@ ERROR_TYPE dummy_obj_viewer_app::on_swapchain_recreated()
 }
 
 
-ERROR_TYPE dummy_obj_viewer_app::on_mouse_scroll(double x, double y)
-{
-    auto dir = glm::normalize(m_camera.target_position - m_camera.eye_position);
-    m_camera.eye_position += dir * float(y) * 0.05f;
-    return vk_app::on_mouse_scroll(x, y);
-}
-
-
-ERROR_TYPE dummy_obj_viewer_app::on_mouse_button(int button, int action, int mode)
-{
-    if (button == VK_APP_MOUSE_LEFT) {
-        if (action == VK_APP_PRESS) {
-            m_state &= ~MODEL_RELEASE_BIT;
-            m_state |= MODEL_MOUNT_BIT;
-            LOG_INFO("MOUSE PRESS");
-        } else {
-            m_state &= ~MODEL_MOUNT_BIT;
-            m_state |= MODEL_RELEASE_BIT;
-            LOG_INFO("MOUSE RELEASE");
-        }
-    }
-    
-    return vk_app::on_mouse_button(button, action, mode);
-}
-
-ERROR_TYPE dummy_obj_viewer_app::on_mouse_moved(uint64_t x, uint64_t y)
-{
-    static glm::vec2 last_pos{-1, -1};
-
-    if (m_state & MODEL_MOUNT_BIT) {
-        if (x != last_pos.x) {
-            m_state |=  (x - last_pos.x > 0 ? MODEL_ROTATE_POSITIVE_X_BIT : MODEL_ROTATE_NEGATIVE_X_BIT);
-        }
-
-        if (y != last_pos.y) {
-            m_state |= (y - last_pos.y > 0 ? MODEL_ROTATE_POSITIVE_Y_BIT : MODEL_ROTATE_NEGATIVE_Y_BIT);
-        }
-    }
-
-    last_pos = {x, y};
-    
-    return vk_app::on_mouse_moved(x, y);
-}
-
-
 ERROR_TYPE dummy_obj_viewer_app::draw_frame()
 {
-
-    static global_ubo ubo_data{};
-
-    auto model = glm::identity<glm::mat4>();
-
-    auto view_transform = glm::identity<glm::mat4>();
-
-    if (m_state & MODEL_ROTATE_POSITIVE_Y_BIT) {
-        m_state &= ~MODEL_ROTATE_POSITIVE_Y_BIT;
-        view_transform = glm::rotate(view_transform, glm::radians(0.5f), {1.0f, 0.0f, 0.0f});
-    }
-
-    if (m_state & MODEL_ROTATE_NEGATIVE_Y_BIT) {
-        m_state &= ~MODEL_ROTATE_NEGATIVE_Y_BIT;
-        view_transform = glm::rotate(view_transform, glm::radians(-0.5f), {1.0f, 0.0f, 0.0f});
-    }
-
-    //if (m_state & MODEL_ROTATE_POSITIVE_X_BIT) {
-    //    m_state &= ~MODEL_ROTATE_POSITIVE_X_BIT;
-    //    view_transform = glm::rotate(view_transform, glm::radians(0.5f), {0.0f, 1.0f, 0.0f});
-    //}
-
-    //if (m_state & MODEL_ROTATE_NEGATIVE_X_BIT) {
-    //    m_state &= ~MODEL_ROTATE_NEGATIVE_X_BIT;
-    //    view_transform = glm::rotate(view_transform, glm::radians(-0.5f), {0.0f, 1.0f, 0.0f});
-    //}
-
-    
-
-    m_camera.eye_position = glm::mat3(view_transform) * m_camera.eye_position;
-
-    m_camera.update(m_swapchain_data.swapchain_info->imageExtent.width, m_swapchain_data.swapchain_info->imageExtent.height);
-    ubo_data.model = model;
-    ubo_data.view_projection = m_camera.view_proj_matrix;
-    ubo_data.projection = m_camera.proj_matrix;
-    ubo_data.view = m_camera.view_matrix;
-    ubo_data.mvp = ubo_data.projection * ubo_data.view * ubo_data.model;
-
-    void* mapped_data;
-    vmaMapMemory(vk_utils::context::get().allocator(), m_ubo, &mapped_data);
-    std::memcpy(mapped_data, &ubo_data, sizeof(ubo_data));
-    vmaFlushAllocation(vk_utils::context::get().allocator(), m_ubo, 0, VK_WHOLE_SIZE);
-    vmaUnmapMemory(vk_utils::context::get().allocator(), m_ubo);
-
+    PASS_ERROR(base_obj_viewer_app::draw_frame());
     HANDLE_ERROR(begin_frame());
     HANDLE_ERROR(finish_frame(m_command_buffers[m_swapchain_data.current_image]));
 
@@ -287,27 +200,6 @@ ERROR_TYPE dummy_obj_viewer_app::init_dummy_shaders(
 }
 
 
-ERROR_TYPE dummy_obj_viewer_app::init_dummy_model_resources(const char* path, const char** textures, size_t textures_size)
-{
-    VkCommandPoolCreateInfo cmd_pool_create_info{};
-    cmd_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    cmd_pool_create_info.pNext = nullptr;
-    cmd_pool_create_info.queueFamilyIndex = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
-    m_command_pool.init(vk_utils::context::get().device(), &cmd_pool_create_info);
-    PASS_ERROR(vk_utils::create_buffer(m_ubo, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sizeof(global_ubo)));
-
-    vk_utils::obj_loader::obj_model_info model_info{};
-    for (int i = 0; i < textures_size; ++i) {
-        auto& mat_textures = model_info.model_textures.emplace_back();
-        mat_textures[0] = textures[i];
-    }
-
-    vk_utils::obj_loader loader{};
-    PASS_ERROR(loader.load_model(path, model_info, vk_utils::context::get().queue(vk_utils::context::QUEUE_TYPE_GRAPHICS), m_command_pool, m_model));
-    PASS_ERROR(init_dummy_shaders(m_model, m_ubo, m_dummy_shader_group));
-
-    RAISE_ERROR_OK();
-}
 ERROR_TYPE dummy_obj_viewer_app::init_geom_pipelines(const vk_utils::obj_loader::obj_model& model, const std::vector<shader>& shaders, VkPrimitiveTopology topo, VkExtent2D input_viewport, std::vector<vk_utils::graphics_pipeline_handler>& pipelines, std::vector<vk_utils::pipeline_layout_handler>& pipeline_layouts)
 {
     for (int i = 0; i < model.sub_geometries.size(); ++i) {
@@ -513,14 +405,13 @@ ERROR_TYPE dummy_obj_viewer_app::init_geom_pipelines(const vk_utils::obj_loader:
 
 ERROR_TYPE dummy_obj_viewer_app::record_obj_model_dummy_draw_commands(const vk_utils::obj_loader::obj_model& model, const shader_group& sgroup, VkCommandPool cmd_pool, vk_utils::cmd_buffers_handler& cmd_buffers, std::vector<vk_utils::pipeline_layout_handler>& pipelines_layouts, std::vector<vk_utils::graphics_pipeline_handler>& pipelines)
 {
-    
     PASS_ERROR(init_geom_pipelines(
-                   model,
-                   sgroup.shaders,
-                   VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-                   m_swapchain_data.swapchain_info->imageExtent,
-                   pipelines,
-                   pipelines_layouts));
+        model,
+        sgroup.shaders,
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        m_swapchain_data.swapchain_info->imageExtent,
+        pipelines,
+        pipelines_layouts));
 
     VkCommandBufferAllocateInfo buffers_alloc_info{};
     buffers_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
