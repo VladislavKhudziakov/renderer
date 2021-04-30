@@ -200,7 +200,7 @@ ERROR_TYPE base_obj_viewer_app::draw_frame()
     m_camera.eye_position = glm::mat3(view_transform) * m_camera.eye_position;
 
     m_camera.update(m_swapchain_data.swapchain_info->imageExtent.width, m_swapchain_data.swapchain_info->imageExtent.height);
-    ubo_data.model = model;
+    ubo_data.model = model * m_model.model_transform;
     ubo_data.view_projection = m_camera.view_proj_matrix;
     ubo_data.projection = m_camera.proj_matrix;
     ubo_data.view = m_camera.view_matrix;

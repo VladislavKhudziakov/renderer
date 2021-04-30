@@ -36,8 +36,7 @@ protected:
         const vk_utils::obj_loader::obj_model& model,
         const VkBuffer ubo,
         shader_group& sgroup);
-    ERROR_TYPE init_dummy_model_resources(const char* path, const char** textures = nullptr, size_t textures_size = 0);
-
+    
     ERROR_TYPE init_geom_pipelines(
         const vk_utils::obj_loader::obj_model& model,
         const std::vector<shader>& shaders,
@@ -59,9 +58,6 @@ protected:
     ERROR_TYPE init_main_frame_buffers();
     
     shader_group m_dummy_shader_group{};
-
-    vk_utils::vma_buffer_handler m_vert_staging_buffer{};
-    vk_utils::vma_buffer_handler m_index_staging_buffer{};
 
     std::vector<vk_utils::pipeline_layout_handler> m_pipelines_layout{};
     std::vector<vk_utils::graphics_pipeline_handler> m_graphics_pipelines{};

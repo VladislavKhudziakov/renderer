@@ -15,16 +15,6 @@ dummy_obj_viewer_app::dummy_obj_viewer_app(const char* app_name, int argc, const
 ERROR_TYPE dummy_obj_viewer_app::on_vulkan_initialized()
 {
     PASS_ERROR(base_obj_viewer_app::on_vulkan_initialized());
-    if (m_app_info.argc <= 1) {
-        RAISE_ERROR_FATAL(-1, "invalid arguments count.");
-    }
-
-    const char** textures_list = nullptr;
-
-    if (m_app_info.argc > 2) {
-        textures_list = m_app_info.argv + 2;
-    }
-
     PASS_ERROR(init_main_render_pass());
     PASS_ERROR(init_main_frame_buffers());
     PASS_ERROR(init_dummy_shaders(m_model, m_ubo, m_dummy_shader_group));
@@ -75,8 +65,8 @@ ERROR_TYPE dummy_obj_viewer_app::init_dummy_shaders(
     auto& fs = sgroup.shader_modules.emplace_back();
     VkShaderStageFlagBits fs_stage{};
 
-    vk_utils::load_shader("./shaders/dummy.vert.glsl.spv", vs, vs_stage);
-    vk_utils::load_shader("./shaders/dummy.frag.glsl.spv", fs, fs_stage);
+    vk_utils::load_shader(WORK_DIR"/shaders/dummy.vert.glsl.spv", vs, vs_stage);
+    vk_utils::load_shader(WORK_DIR"/shaders/dummy.frag.glsl.spv", fs, fs_stage);
 
     VkDescriptorSetLayoutBinding bindings[]{
         {

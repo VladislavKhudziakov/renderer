@@ -3,10 +3,13 @@
 #include <vk_utils/handlers.hpp>
 #include <errors/error_handler.hpp>
 
+#include <glm/mat4x4.hpp>
+
 #include <vector>
 #include <array>
 #include <variant>
 #include <unordered_map>
+#include <string>
 
 namespace tinyobj
 {
@@ -80,6 +83,9 @@ namespace vk_utils
             vk_utils::vma_buffer_handler index_buffer{};
             std::vector<texture> textures{};
             std::vector<obj_sub_geometry> sub_geometries{};
+            std::string path{};
+
+            glm::mat4 model_transform{1};
         };
 
         struct  obj_model_info

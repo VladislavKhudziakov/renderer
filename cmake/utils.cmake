@@ -18,7 +18,24 @@ function (make_bin)
         file(GLOB_RECURSE ${NAME_APP_NAME}_OBJC_SOURCES ${CMAKE_CURRENT_LIST_DIR}/*.mm)
     endif()
 
-    file(GLOB_RECURSE NEW_APP_SHADERS ${CMAKE_CURRENT_LIST_DIR}/*.glsl)
+    file(
+    GLOB_RECURSE 
+    NEW_APP_SHADERS
+        ${CMAKE_CURRENT_LIST_DIR}/*.glsl
+        ${CMAKE_CURRENT_LIST_DIR}/*.vert
+        ${CMAKE_CURRENT_LIST_DIR}/*.frag
+        ${CMAKE_CURRENT_LIST_DIR}/*.tesc
+        ${CMAKE_CURRENT_LIST_DIR}/*.tese
+        ${CMAKE_CURRENT_LIST_DIR}/*.geom
+        ${CMAKE_CURRENT_LIST_DIR}/*.comp
+        ${CMAKE_CURRENT_LIST_DIR}/*.mesh
+        ${CMAKE_CURRENT_LIST_DIR}/*.task
+        ${CMAKE_CURRENT_LIST_DIR}/*.rgen
+        ${CMAKE_CURRENT_LIST_DIR}/*.rhit
+        ${CMAKE_CURRENT_LIST_DIR}/*.rahit
+        ${CMAKE_CURRENT_LIST_DIR}/*.rchit
+        ${CMAKE_CURRENT_LIST_DIR}/*.rmiss
+        ${CMAKE_CURRENT_LIST_DIR}/*.rcall)
 
     if (${NEW_APP_LIB})
         add_library(${NEW_APP_NAME} ${CURR_NEW_APP_LIB_TYPE} ${${NAME_APP_NAME}_SOURCES} ${${NAME_APP_NAME}_OBJC_SOURCES})
@@ -30,6 +47,8 @@ function (make_bin)
         add_executable(${NEW_APP_NAME} ${${NAME_APP_NAME}_SOURCES} ${${NAME_APP_NAME}_OBJC_SOURCES})
         target_link_libraries(${NEW_APP_NAME} PRIVATE ${NEW_APP_DEPENDS})
     endif()
+
+    target_compile_definitions(${NEW_APP_NAME} PRIVATE -DWORK_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
     if (WIN32)
         set(GLSL_VALIDATOR $ENV{VULKAN_SDK}/Bin/glslangValidator.exe)

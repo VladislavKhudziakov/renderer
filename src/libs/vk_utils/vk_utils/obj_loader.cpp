@@ -10,10 +10,13 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <optional>
 #include <array>
 #include <vector>
 #include <cstring>
+#include <filesystem>
 
 ERROR_TYPE vk_utils::obj_loader::load_model(
     const char* path,
@@ -31,6 +34,8 @@ ERROR_TYPE vk_utils::obj_loader::load_model(
     if (!reader.ParseFromFile(path)) {
         RAISE_ERROR_FATAL(-1, reader.Error());
     }
+
+    model.path = path;
 
     const tinyobj::attrib_t& attrib = reader.GetAttrib();
     const std::vector<tinyobj::shape_t>& shapes = reader.GetShapes();
@@ -55,9 +60,9 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
 {
     struct vertex
     {
-        std::array<float, 3> position;
-        std::optional<std::array<float, 3>> normal;
-        std::optional<std::array<float, 3>> texcoord;
+        glm::vec3 position;
+        std::optional<glm::vec3> normal;
+        std::optional<glm::vec2> texcoord;
     };
 
     struct geometry
@@ -86,6 +91,9 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
         };
     };
 
+    glm::vec3 max_pos{std::numeric_limits<float>::min(), std::numeric_limits<float>::min(), std::numeric_limits<float>::min()};
+    glm::vec3 min_pos{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+
     for (const auto& shape : shapes) {
         auto& g = geometries.emplace_back();
         g.vertices.reserve(shape.mesh.indices.size());
@@ -111,20 +119,28 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
             v.position[1] = attrib.vertices[3 * i.vertex_index + 1];
             v.position[2] = attrib.vertices[3 * i.vertex_index + 2];
 
+            max_pos.x = std::max(max_pos.x, v.position[0]);
+            max_pos.y = std::max(max_pos.y, v.position[1]);
+            max_pos.z = std::max(max_pos.z, v.position[2]);
+
+            min_pos.x = std::min(min_pos.x, v.position[0]);
+            min_pos.y = std::min(min_pos.y, v.position[1]);
+            min_pos.z = std::min(min_pos.z, v.position[2]);
+
             if (i.normal_index >= 0) {
-                v.normal = {attrib.normals[3 * i.normal_index], attrib.vertices[3 * i.normal_index + 1], attrib.vertices[3 * i.normal_index + 2]};
+                v.normal = {attrib.normals[3 * i.normal_index], attrib.normals[3 * i.normal_index + 1], attrib.normals[3 * i.normal_index + 2]};
             }
 
             if (i.texcoord_index >= 0) {
-                v.texcoord = {attrib.texcoords[2 * i.texcoord_index], attrib.texcoords[2 * i.texcoord_index + 1]};
+                v.texcoord = glm::vec2{attrib.texcoords[2 * i.texcoord_index], attrib.texcoords[2 * i.texcoord_index + 1]};
             }
 
             auto vertex_exist = std::find_if(g.vertices.begin(), g.vertices.end(), vert_eq(v));
 
             if (vertex_exist != g.vertices.end()) {
-                g.indices.emplace_back(std::distance(g.vertices.begin(), vertex_exist));
+                g.indices.push_back(std::distance(g.vertices.begin(), vertex_exist));
             } else {
-                g.indices.emplace_back(g.vertices.size());
+                g.indices.push_back(g.vertices.size());
                 g.vertices.emplace_back(v);
             }
         }
@@ -172,14 +188,14 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
             vert_buffer_data.push_back(v.position[2]);
 
             if (v.normal) {
-                vert_buffer_data.push_back(v.normal->at(0));
-                vert_buffer_data.push_back(v.normal->at(1));
-                vert_buffer_data.push_back(v.normal->at(2));
+                vert_buffer_data.push_back(v.normal->x);
+                vert_buffer_data.push_back(v.normal->y);
+                vert_buffer_data.push_back(v.normal->z);
             }
 
             if (v.texcoord) {
-                vert_buffer_data.push_back(v.texcoord->at(0));
-                vert_buffer_data.push_back(v.texcoord->at(1));
+                vert_buffer_data.push_back(v.texcoord->x);
+                vert_buffer_data.push_back(v.texcoord->y);
             }
         }
 
@@ -279,6 +295,21 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
     model.vertex_buffer = std::move(vertex_buffer);
     model.index_buffer = std::move(index_buffer);
 
+    glm::vec3 offset =  (max_pos - min_pos) / 2.0f;
+
+    float scale_x = abs(min_pos.x - offset.x) > abs(max_pos.x - offset.x) ? abs(min_pos.x - offset.x) : abs(max_pos.x - offset.x);
+    float scale_y = abs(min_pos.y - offset.y) > abs(max_pos.y - offset.y) ? abs(min_pos.y - offset.y) : abs(max_pos.y - offset.y);
+    float scale_z = abs(min_pos.z - offset.z) > abs(max_pos.z - offset.z) ? abs(min_pos.z - offset.z) : abs(max_pos.z - offset.z);
+    float fanal_scale = scale_x > scale_y ? scale_x : scale_y;
+    fanal_scale = scale_z > fanal_scale ? 1.0f / scale_z : 1.0f / fanal_scale;
+
+    glm::vec3 scale = glm::vec3(fanal_scale, fanal_scale, fanal_scale);
+     
+    offset = -(min_pos + (max_pos - min_pos) / 2.0f) * scale;
+
+    model.model_transform = glm::translate(model.model_transform, offset);
+    model.model_transform = glm::scale(model.model_transform, scale);
+
     RAISE_ERROR_OK();
 }
 
@@ -312,17 +343,23 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_materials(
         }
     }
 
-    auto add_material_texture = [&get_tex_index, &loaded_textures_names, &loaded_textures, transfer_queue, command_pool](const std::string& s) {
-        const auto i = get_tex_index(s.c_str());
+    auto add_material_texture = [&get_tex_index, &loaded_textures_names, &loaded_textures, &model, transfer_queue, command_pool](const std::string& image_path) {
+        const auto i = get_tex_index(image_path.c_str());
 
         if (i >= 0) {
             return i;
         }
 
-        loaded_textures_names.emplace_back(s.c_str());
+        loaded_textures_names.emplace_back(image_path.c_str());
 
         texture new_texture{};
-        HANDLE_ERROR(load_texture_2D(s.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+        if (std::filesystem::path(image_path).is_absolute()) {
+            HANDLE_ERROR(load_texture_2D(image_path.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+        } else {
+            auto image_abs_path = (std::filesystem::path(model.path) / image_path).string();
+            HANDLE_ERROR(load_texture_2D(image_abs_path.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+        }
+        
         loaded_textures.emplace_back(std::move(new_texture));
 
         return static_cast<decltype(i)>(loaded_textures.size() - 1);
