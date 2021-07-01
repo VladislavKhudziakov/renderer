@@ -83,22 +83,24 @@ namespace vk_utils
             vk_utils::vma_buffer_handler index_buffer{};
             std::vector<texture> textures{};
             std::vector<obj_sub_geometry> sub_geometries{};
-            std::string path{};
+            std::unordered_map<std::string, uint32_t> other_texturs_key_index_map{};
 
             glm::mat4 model_transform{1};
         };
 
         struct  obj_model_info
         {
+            std::string model_path{};
             obj_render_technique_type model_render_technique = PHONG;
             std::unordered_map<std::string, std::array<std::string, PHONG_SIZE>> phong_textures;
             std::unordered_map<std::string, std::array<std::string, PBR_SIZE>> pbr_textures;
+            std::vector<std::string> other_textures;
         };
 
         ERROR_TYPE load_model(
-            const char*,
             const obj_model_info&,
             VkQueue transfer_queue,
+            uint32_t transfer_queue_index,
             VkCommandPool command_pool,
             obj_model&);
 
@@ -107,6 +109,7 @@ namespace vk_utils
             const tinyobj::attrib_t& attrib,
             const std::vector<tinyobj::shape_t>& shapes,
             VkQueue transfer_queue,
+            uint32_t transfer_queue_index,
             VkCommandPool command_pool,
             obj_model& model);
 
@@ -115,6 +118,7 @@ namespace vk_utils
             const std::vector<tinyobj::material_t>& materials,
             const obj_model_info& model_info,
             VkQueue transfer_queue,
+            uint32_t transfer_queue_index,
             VkCommandPool command_pool,
             obj_model& model);
     };

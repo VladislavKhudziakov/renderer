@@ -6,8 +6,8 @@
 #include <algorithm>
 
 
-dummy_obj_viewer_app::dummy_obj_viewer_app(const char* app_name, int argc, const char** argv)
-    : base_obj_viewer_app(app_name, argc, argv)
+dummy_obj_viewer_app::dummy_obj_viewer_app(const char* app_name)
+    : base_obj_viewer_app(app_name)
 {
 }
 

@@ -13,8 +13,8 @@ namespace app
     class vk_app : public base_app
     {
     public:
-        vk_app(const char* app_name, int argc, const char** argv);
-        ERROR_TYPE run() override;
+        vk_app(const char* app_name);
+        ERROR_TYPE run(int argc, const char** argv) override;
 
     protected:
         enum input_action
@@ -81,10 +81,7 @@ namespace app
         virtual ERROR_TYPE on_swapchain_recreated() = 0;
         virtual ERROR_TYPE draw_frame() = 0;
 
-        virtual ERROR_TYPE on_window_size_changed(int w, int h)
-        {
-            RAISE_ERROR_OK();
-        }
+        virtual ERROR_TYPE on_window_size_changed(int w, int h);
 
         virtual ERROR_TYPE on_mouse_moved(int x, int y)
         {
@@ -111,17 +108,31 @@ namespace app
              RAISE_ERROR_OK();
          }
 
+         virtual ERROR_TYPE on_window_focus_changed(int);
+
+         virtual ERROR_TYPE on_window_maximized(int maximized);
+
         VkSurfaceCapabilitiesKHR m_surface_capabilities{};
         swapchain_data m_swapchain_data{};
         app_data m_app_info{};
 
     private:
+        enum frame_state
+        {
+            WINDOW_OK_BIT = 1,
+            WINDOW_ZERO_SIZE_BIT = 2
+        };
+
         static void window_resized_callback(GLFWwindow* window, int w, int h);
+        static void window_focus_callback(GLFWwindow* window, int focused);
+        static void window_maximized_callback(GLFWwindow* window, int maximized);
         static void mouse_button_callback(GLFWwindow*, int, int, int);
         static void cursor_pos_callback(GLFWwindow*, double, double);
         static void cursor_enter_callback(GLFWwindow*, int);
         static void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 
         GLFWwindow* m_window{};
+
+        uint32_t m_frame_state = WINDOW_OK_BIT;
     };
 } // namespace app

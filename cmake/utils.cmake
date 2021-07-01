@@ -43,7 +43,7 @@ function (make_bin)
         target_include_directories(${NEW_APP_NAME} PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
         target_link_libraries(${NEW_APP_NAME} PUBLIC ${NEW_APP_DEPENDS})
-    else()
+    else()   
         add_executable(${NEW_APP_NAME} ${${NAME_APP_NAME}_SOURCES} ${${NAME_APP_NAME}_OBJC_SOURCES})
         target_link_libraries(${NEW_APP_NAME} PRIVATE ${NEW_APP_DEPENDS})
     endif()

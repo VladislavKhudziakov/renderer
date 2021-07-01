@@ -5,8 +5,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-test_push_constants_app::test_push_constants_app(const char* app_name, int argc, const char** argv)
-    : base_obj_viewer_app(app_name, argc, argv)
+
+test_push_constants_app::test_push_constants_app(const char* app_name)
+    : base_obj_viewer_app(app_name)
 {
 }
 

@@ -7,21 +7,18 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb/stb_image.h>
-
 #include <glm/gtc/matrix_transform.hpp>
 
-#include <optional>
 #include <array>
 #include <vector>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 
 ERROR_TYPE vk_utils::obj_loader::load_model(
-    const char* path,
     const vk_utils::obj_loader::obj_model_info& model_info,
     VkQueue transfer_queue,
+    uint32_t transfer_queue_index,
     VkCommandPool command_pool,
     vk_utils::obj_loader::obj_model& model)
 {
@@ -31,11 +28,9 @@ ERROR_TYPE vk_utils::obj_loader::load_model(
 
     tinyobj::ObjReader reader;
 
-    if (!reader.ParseFromFile(path)) {
+    if (!reader.ParseFromFile(model_info.model_path.c_str())) {
         RAISE_ERROR_FATAL(-1, reader.Error());
     }
-
-    model.path = path;
 
     const tinyobj::attrib_t& attrib = reader.GetAttrib();
     const std::vector<tinyobj::shape_t>& shapes = reader.GetShapes();
@@ -45,8 +40,8 @@ ERROR_TYPE vk_utils::obj_loader::load_model(
         LOG_WARN(reader.Warning());
     }
 
-    PASS_ERROR(init_obj_geometry(attrib, shapes, transfer_queue, command_pool, model));
-    PASS_ERROR(init_obj_materials(shapes, materials, model_info, transfer_queue, command_pool, model));
+    PASS_ERROR(init_obj_geometry(attrib, shapes, transfer_queue, transfer_queue_index, command_pool, model));
+    PASS_ERROR(init_obj_materials(shapes, materials, model_info, transfer_queue, transfer_queue_index, command_pool, model));
     RAISE_ERROR_OK();
 }
 
@@ -55,6 +50,7 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
     const tinyobj::attrib_t& attrib,
     const std::vector<tinyobj::shape_t>& shapes,
     VkQueue transfer_queue,
+    uint32_t transfer_queue_index,
     VkCommandPool command_pool,
     obj_model& model)
 {
@@ -102,12 +98,12 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
         g.vertex_format.emplace_back(VK_FORMAT_R32G32B32_SFLOAT);
         g.vertex_size += sizeof(float[3]);
 
-        if (i.normal_index >= 0) {
+        if (static_cast<size_t>(i.normal_index) >= 0) {
             g.vertex_format.emplace_back(VK_FORMAT_R32G32B32_SFLOAT);
             g.vertex_size += sizeof(float[3]);
         }
 
-        if (i.texcoord_index >= 0) {
+        if (static_cast<size_t>(i.texcoord_index) >= 0) {
             g.vertex_format.emplace_back(VK_FORMAT_R32G32_SFLOAT);
             g.vertex_size += sizeof(float[2]);
         }
@@ -115,9 +111,9 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
         for (auto& i : shape.mesh.indices) {
             vertex v{};
 
-            v.position[0] = attrib.vertices[3 * i.vertex_index];
-            v.position[1] = attrib.vertices[3 * i.vertex_index + 1];
-            v.position[2] = attrib.vertices[3 * i.vertex_index + 2];
+            v.position[0] = attrib.vertices[3 * static_cast<size_t>(i.vertex_index)];
+            v.position[1] = attrib.vertices[3 * static_cast<size_t>(i.vertex_index) + 1];
+            v.position[2] = attrib.vertices[3 * static_cast<size_t>(i.vertex_index) + 2];
 
             max_pos.x = std::max(max_pos.x, v.position[0]);
             max_pos.y = std::max(max_pos.y, v.position[1]);
@@ -127,12 +123,12 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
             min_pos.y = std::min(min_pos.y, v.position[1]);
             min_pos.z = std::min(min_pos.z, v.position[2]);
 
-            if (i.normal_index >= 0) {
-                v.normal = {attrib.normals[3 * i.normal_index], attrib.normals[3 * i.normal_index + 1], attrib.normals[3 * i.normal_index + 2]};
+            if (static_cast<size_t>(i.normal_index) >= 0) {
+                v.normal = glm::vec3{attrib.normals[3 * static_cast<size_t>(i.normal_index)], attrib.normals[3 * static_cast<size_t>(i.normal_index) + 1], attrib.normals[3 * static_cast<size_t>(i.normal_index) + 2]};
             }
 
-            if (i.texcoord_index >= 0) {
-                v.texcoord = glm::vec2{attrib.texcoords[2 * i.texcoord_index], attrib.texcoords[2 * i.texcoord_index + 1]};
+            if (static_cast<size_t>(i.texcoord_index) >= 0) {
+                v.texcoord = glm::vec2{attrib.texcoords[2 * static_cast<size_t>(i.texcoord_index)], attrib.texcoords[2 * static_cast<size_t>(i.texcoord_index) + 1]};
             }
 
             auto vertex_exist = std::find_if(g.vertices.begin(), g.vertices.end(), vert_eq(v));
@@ -305,7 +301,7 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_geometry(
 
     glm::vec3 scale = glm::vec3(fanal_scale, fanal_scale, fanal_scale);
      
-    offset = -(min_pos + (max_pos - min_pos) / 2.0f) * scale;
+    offset = (min_pos + (max_pos - min_pos) / 2.0f) * scale;
 
     model.model_transform = glm::translate(model.model_transform, offset);
     model.model_transform = glm::scale(model.model_transform, scale);
@@ -319,6 +315,7 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_materials(
     const std::vector<tinyobj::material_t>& materials,
     const obj_model_info& model_info,
     VkQueue transfer_queue,
+    uint32_t transfer_queue_index,
     VkCommandPool command_pool,
     obj_model& model)
 {
@@ -336,14 +333,26 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_materials(
         for (auto tex_path : tex_val) {
             if (!tex_path.empty() && get_tex_index(tex_path.c_str()) < 0) {
                 texture new_texture{};
-                PASS_ERROR(load_texture_2D(tex_path.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+                PASS_ERROR(load_texture(tex_path.c_str(), transfer_queue, transfer_queue_index, command_pool, {}, new_texture.image, new_texture.image_view, new_texture.sampler));
                 loaded_textures_names.emplace_back(tex_path.c_str());
                 loaded_textures.emplace_back(std::move(new_texture));
             }
         }
     }
 
-    auto add_material_texture = [&get_tex_index, &loaded_textures_names, &loaded_textures, &model, transfer_queue, command_pool](const std::string& image_path) {
+    for (const auto& tex_path : model_info.other_textures) {
+        texture new_texture{};
+        PASS_ERROR(load_texture(tex_path.c_str(), transfer_queue, transfer_queue_index, command_pool, {}, new_texture.image, new_texture.image_view, new_texture.sampler));
+        loaded_textures_names.emplace_back(tex_path.c_str());
+        model.other_texturs_key_index_map[tex_path] = loaded_textures.size();
+        loaded_textures.emplace_back(std::move(new_texture));
+    }
+
+    auto add_material_texture = [&get_tex_index, &loaded_textures_names, &loaded_textures, transfer_queue, transfer_queue_index, command_pool, &model_info](const std::string& image_path) -> int32_t {
+        if (image_path.empty()) {
+            return -1;
+        }
+
         const auto i = get_tex_index(image_path.c_str());
 
         if (i >= 0) {
@@ -354,10 +363,10 @@ ERROR_TYPE vk_utils::obj_loader::init_obj_materials(
 
         texture new_texture{};
         if (std::filesystem::path(image_path).is_absolute()) {
-            HANDLE_ERROR(load_texture_2D(image_path.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+            HANDLE_ERROR(load_texture(image_path.c_str(), transfer_queue, transfer_queue_index, command_pool, {}, new_texture.image, new_texture.image_view, new_texture.sampler));
         } else {
-            auto image_abs_path = (std::filesystem::path(model.path) / image_path).string();
-            HANDLE_ERROR(load_texture_2D(image_abs_path.c_str(), transfer_queue, command_pool, new_texture.image, new_texture.image_view, new_texture.sampler));
+            auto image_abs_path = (std::filesystem::path(model_info.model_path).parent_path() / image_path).string();
+            HANDLE_ERROR(load_texture(image_abs_path.c_str(), transfer_queue, transfer_queue_index, command_pool, {}, new_texture.image, new_texture.image_view, new_texture.sampler));
         }
         
         loaded_textures.emplace_back(std::move(new_texture));

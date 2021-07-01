@@ -21,6 +21,9 @@ make_bin(
         errors
         VulkanMemoryAllocator)
 
+if (WIN32)
+    target_compile_options(vk_utils PRIVATE /permissive)
+endif()
 
 if (${RENDERER_ENABLE_VALIDATION_LAYERS})
     target_compile_definitions(vk_utils PRIVATE -DUSE_VALIDATION_LAYERS)

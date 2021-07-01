@@ -10,7 +10,7 @@ namespace app
     class base_app
     {
     public:
-        virtual ERROR_TYPE run();
+        virtual ERROR_TYPE run(int argc, const char** argv);
 
     protected:
         virtual ERROR_TYPE init_window() = 0;

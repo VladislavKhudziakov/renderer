@@ -10,7 +10,7 @@
 class test_push_constants_app : public base_obj_viewer_app
 {
 public:
-    test_push_constants_app(const char* app_name, int argc, const char** argv);
+    test_push_constants_app(const char* app_name);
 
 protected:
     struct push_constant_data {

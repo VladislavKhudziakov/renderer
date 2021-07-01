@@ -8,7 +8,7 @@
 class dummy_obj_viewer_app : public base_obj_viewer_app
 {
 public:
-    dummy_obj_viewer_app(const char* app_name, int argc, const char** argv);
+    dummy_obj_viewer_app(const char* app_name);
 
 protected:
     struct shader

@@ -4,7 +4,7 @@
 
 #include <errors/error_handler.hpp>
 
-ERROR_TYPE app::base_app::run()
+ERROR_TYPE app::base_app::run(int argc, const char** argv)
 {
     HANDLE_ERROR(init_window());
     HANDLE_ERROR(run_main_loop());

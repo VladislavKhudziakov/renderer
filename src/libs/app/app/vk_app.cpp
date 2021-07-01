@@ -16,17 +16,18 @@ namespace
     const char* device_extensions[]{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 }
 
-vk_app::vk_app(const char* app_name, int argc, const char** argv)
+vk_app::vk_app(const char* app_name)
     : m_app_info{}
 {
     m_app_info.app_name = app_name;
-    m_app_info.argc = argc;
-    m_app_info.argv = argv;
 }
 
-ERROR_TYPE vk_app::run()
+ERROR_TYPE vk_app::run(int argc, const char** argv)
 {
-    return base_app::run();
+    m_app_info.argc = argc;
+    m_app_info.argv = argv;
+
+    return base_app::run(argc, argv);
 }
 
 ERROR_TYPE vk_app::init_window()
@@ -44,6 +45,8 @@ ERROR_TYPE vk_app::init_window()
     glfwSetCursorPosCallback(m_window, cursor_pos_callback);
     glfwSetCursorEnterCallback(m_window, cursor_enter_callback);
     glfwSetScrollCallback(m_window, scroll_callback);
+    glfwSetWindowFocusCallback(m_window, window_focus_callback);
+    glfwSetWindowMaximizeCallback(m_window, window_maximized_callback);
 
     if (m_window == nullptr) {
         RAISE_ERROR_FATAL(-1, "Failed to create window.");
@@ -58,7 +61,12 @@ ERROR_TYPE vk_app::run_main_loop()
 {
     while (!glfwWindowShouldClose(m_window)) {
         glfwPollEvents();
-        PASS_ERROR(draw_frame());
+        
+    if (m_frame_state & WINDOW_ZERO_SIZE_BIT) {
+        continue;
+    }
+
+        HANDLE_ERROR(draw_frame());
     }
 
     vkDeviceWaitIdle(vk_utils::context::get().device());
@@ -134,6 +142,13 @@ ERROR_TYPE vk_app::create_swapchain()
         m_swapchain_data.swapchain_info->imageExtent = get_surface_images_extent();
         m_swapchain_data.swapchain_info->preTransform =
             m_surface_capabilities.currentTransform;
+
+        if (m_swapchain_data.swapchain_info->imageExtent.height == 0 || m_swapchain_data.swapchain_info->imageExtent.width == 0) {
+            m_frame_state |= WINDOW_ZERO_SIZE_BIT;
+            RAISE_ERROR_WARN(WINDOW_ZERO_SIZE_BIT, "cannot create swapchain in zero sized window");
+        } else {
+            m_frame_state &= ~WINDOW_ZERO_SIZE_BIT;
+        }
 
         if (m_surface_capabilities.maxImageCount == 0) {
             m_swapchain_data.swapchain_info->minImageCount = m_surface_capabilities.minImageCount + 1;
@@ -241,15 +256,19 @@ ERROR_TYPE vk_app::create_swapchain()
 
 ERROR_TYPE vk_app::request_swapchain_images()
 {
+    if (m_frame_state & WINDOW_ZERO_SIZE_BIT) {
+        RAISE_ERROR_OK();
+    }
+
     uint32_t images_count;
     vkGetSwapchainImagesKHR(vk_utils::context::get().device(), m_swapchain_data.swapchain, &images_count, nullptr);
 
     m_swapchain_data.swapchain_images.clear();
-    m_swapchain_data.swapchain_images_views.clear();
-
     m_swapchain_data.swapchain_images.resize(images_count);
-    m_swapchain_data.swapchain_images_views.reserve(images_count);
 
+    std::vector<vk_utils::image_view_handler> image_views{};
+    image_views.reserve(images_count);
+    
     vkGetSwapchainImagesKHR(
         vk_utils::context::get().device(),
         m_swapchain_data.swapchain,
@@ -274,12 +293,14 @@ ERROR_TYPE vk_app::request_swapchain_images()
 
     for (int i = 0; i < images_count; ++i) {
         img_view_create_info.image = m_swapchain_data.swapchain_images[i];
-        auto& img_view = m_swapchain_data.swapchain_images_views.emplace_back();
+        auto& img_view = image_views.emplace_back();
 
         if (img_view.init(vk_utils::context::get().device(), &img_view_create_info) != VK_SUCCESS) {
             RAISE_ERROR_FATAL(-1, "cannot init swapchain image view.");
         }
     }
+
+    m_swapchain_data.swapchain_images_views = std::move(image_views);
 
     RAISE_ERROR_OK();
 }
@@ -300,38 +321,77 @@ VkExtent2D vk_app::get_surface_images_extent()
     }
 }
 
+ERROR_TYPE app::vk_app::on_window_size_changed(int w, int h)
+{
+    if (m_frame_state & WINDOW_ZERO_SIZE_BIT && (w != 0 && h != 0)) {
+        HANDLE_ERROR(create_swapchain());
+        HANDLE_ERROR(request_swapchain_images());
+        HANDLE_ERROR(on_swapchain_recreated());
+    }
+
+    RAISE_ERROR_OK();
+}
+
+
+ERROR_TYPE app::vk_app::on_window_focus_changed(int focused)
+{
+    RAISE_ERROR_OK();
+}
+
+
+ERROR_TYPE app::vk_app::on_window_maximized(int maximized)
+{
+    RAISE_ERROR_OK();
+}
+
 
 void vk_app::window_resized_callback(GLFWwindow* window, int w, int h)
 {
     auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
-    self->on_window_size_changed(w, h);
+    HANDLE_ERROR(self->on_window_size_changed(w, h));
 }
 
 
 void app::vk_app::mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 {
     auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
-    self->on_mouse_button(button, action, mods);
+    HANDLE_ERROR(self->on_mouse_button(button, action, mods));
 }
 
 
 void app::vk_app::cursor_pos_callback(GLFWwindow* window, double x, double y)
 {
     auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
-    self->on_mouse_moved(static_cast<uint64_t>(x), static_cast<uint64_t>(y));
+    HANDLE_ERROR(self->on_mouse_moved(static_cast<uint64_t>(x), static_cast<uint64_t>(y)));
 }
 
 
 void app::vk_app::cursor_enter_callback(GLFWwindow* window, int entered)
 {
     auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
-    self->on_mouse_enter(static_cast<bool>(entered));
+    HANDLE_ERROR(self->on_mouse_enter(static_cast<bool>(entered)));
 }
+
 
 void app::vk_app::scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 {
     auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
-    self->on_mouse_scroll(xoffset, yoffset);
+    HANDLE_ERROR(self->on_mouse_scroll(xoffset, yoffset));
+}
+
+
+void app::vk_app::window_focus_callback(GLFWwindow* window, int focused)
+{
+    auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
+    HANDLE_ERROR(self->on_window_focus_changed(focused));
+}
+
+
+
+void app::vk_app::window_maximized_callback(GLFWwindow* window, int maximized)
+{
+    auto self = reinterpret_cast<vk_app*>(glfwGetWindowUserPointer(window));
+    HANDLE_ERROR(self->on_window_maximized(maximized));
 }
 
 
@@ -352,7 +412,7 @@ ERROR_TYPE vk_app::begin_frame()
         if (result != VK_SUCCESS) {
             if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
                 vkDeviceWaitIdle(vk_utils::context::get().device());
-                HANDLE_ERROR(create_swapchain());
+                PASS_ERROR(create_swapchain());
                 HANDLE_ERROR(request_swapchain_images());
                 HANDLE_ERROR(on_swapchain_recreated());
             } else {
@@ -425,7 +485,7 @@ ERROR_TYPE vk_app::finish_frame(VkCommandBuffer cmd_buffer)
     if (result != VK_SUCCESS) {
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             vkDeviceWaitIdle(vk_utils::context::get().device());
-            HANDLE_ERROR(create_swapchain());
+            PASS_ERROR(create_swapchain());
             HANDLE_ERROR(request_swapchain_images());
             HANDLE_ERROR(on_swapchain_recreated());
             RAISE_ERROR_OK();

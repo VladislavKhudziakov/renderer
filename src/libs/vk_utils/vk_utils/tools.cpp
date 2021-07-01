@@ -3,22 +3,366 @@
 
 #include <vk_utils/context.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
+
 #include <shaderc/shaderc.hpp>
 
 #include <cmath>
 #include <cstring>
 #include <memory>
 #include <algorithm>
+#include <map>
 
+namespace
+{
+    struct level_index
+    {
+        uint64_t byte_offset;
+        uint64_t byte_length;
+        uint64_t uncompressed_byte_length;
+    };
+
+    struct ktx2_header
+    {
+        char identifier[12];
+        uint32_t vk_format;
+        uint32_t type_size;
+        uint32_t pixel_width;
+        uint32_t pixel_height;
+        uint32_t pixel_depth;
+        uint32_t layer_count;
+        uint32_t face_count;
+        uint32_t level_count;
+        uint32_t supercompression_scheme;
+
+        uint32_t dfd_byte_offset;
+        uint32_t dfd_byte_length;
+        uint32_t kvd_byte_offset;
+        uint32_t kvd_byte_length;
+        uint64_t sgd_byte_offset;
+        uint64_t sgd_byte_length;
+    };
+
+    constexpr char ktx2_identifier[]{'«', 'K', 'T', 'X', ' ', '2', '0', '»', '\r', '\n', '\x1A', '\n'};
+
+    template<typename T>
+    T read_struct(const uint8_t** begin)
+    {
+        T res{};
+        std::memcpy(&res, *begin, sizeof(res));
+        *begin += sizeof(res);
+        return res;
+    }
+
+    #define read_u32 read_struct<uint32_t>
+
+    VkSamplerCreateInfo get_sampler_info(const vk_utils::sampler_info& sampler, uint32_t level_count)
+    {
+        return {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .magFilter = sampler.fitering,
+            .minFilter = sampler.fitering,
+            .mipmapMode = sampler.fitering == VK_FILTER_NEAREST ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = sampler.tiled ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = sampler.tiled ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = sampler.tiled ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .mipLodBias = 0,
+            .anisotropyEnable = static_cast<VkBool32>(sampler.max_anisatropy != 0),
+            .maxAnisotropy = sampler.max_anisatropy,
+            .compareEnable = VK_FALSE,
+            .compareOp = VK_COMPARE_OP_NEVER,
+            .minLod = 0,
+            .maxLod = level_count - 1.0f,
+            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = VK_FALSE
+        };
+    }
+
+    struct vk_format_info
+    {
+        uint32_t size;
+        uint32_t channel_count;
+    };
+
+    std::map<VkFormat, vk_format_info> vk_format_table = {
+        {VK_FORMAT_UNDEFINED, {0, 0}},
+        {VK_FORMAT_R4G4_UNORM_PACK8, {1, 2}},
+        {VK_FORMAT_R4G4B4A4_UNORM_PACK16, {2, 4}},
+        {VK_FORMAT_B4G4R4A4_UNORM_PACK16, {2, 4}},
+        {VK_FORMAT_R5G6B5_UNORM_PACK16, {2, 3}},
+        {VK_FORMAT_B5G6R5_UNORM_PACK16, {2, 3}},
+        {VK_FORMAT_R5G5B5A1_UNORM_PACK16, {2, 4}},
+        {VK_FORMAT_B5G5R5A1_UNORM_PACK16, {2, 4}},
+        {VK_FORMAT_A1R5G5B5_UNORM_PACK16, {2, 4}},
+        {VK_FORMAT_R8_UNORM, {1, 1}},
+        {VK_FORMAT_R8_SNORM, {1, 1}},
+        {VK_FORMAT_R8_USCALED, {1, 1}},
+        {VK_FORMAT_R8_SSCALED, {1, 1}},
+        {VK_FORMAT_R8_UINT, {1, 1}},
+        {VK_FORMAT_R8_SINT, {1, 1}},
+        {VK_FORMAT_R8_SRGB, {1, 1}},
+        {VK_FORMAT_R8G8_UNORM, {2, 2}},
+        {VK_FORMAT_R8G8_SNORM, {2, 2}},
+        {VK_FORMAT_R8G8_USCALED, {2, 2}},
+        {VK_FORMAT_R8G8_SSCALED, {2, 2}},
+        {VK_FORMAT_R8G8_UINT, {2, 2}},
+        {VK_FORMAT_R8G8_SINT, {2, 2}},
+        {VK_FORMAT_R8G8_SRGB, {2, 2}},
+        {VK_FORMAT_R8G8B8_UNORM, {3, 3}},
+        {VK_FORMAT_R8G8B8_SNORM, {3, 3}},
+        {VK_FORMAT_R8G8B8_USCALED, {3, 3}},
+        {VK_FORMAT_R8G8B8_SSCALED, {3, 3}},
+        {VK_FORMAT_R8G8B8_UINT, {3, 3}},
+        {VK_FORMAT_R8G8B8_SINT, {3, 3}},
+        {VK_FORMAT_R8G8B8_SRGB, {3, 3}},
+        {VK_FORMAT_B8G8R8_UNORM, {3, 3}},
+        {VK_FORMAT_B8G8R8_SNORM, {3, 3}},
+        {VK_FORMAT_B8G8R8_USCALED, {3, 3}},
+        {VK_FORMAT_B8G8R8_SSCALED, {3, 3}},
+        {VK_FORMAT_B8G8R8_UINT, {3, 3}},
+        {VK_FORMAT_B8G8R8_SINT, {3, 3}},
+        {VK_FORMAT_B8G8R8_SRGB, {3, 3}},
+        {VK_FORMAT_R8G8B8A8_UNORM, {4, 4}},
+        {VK_FORMAT_R8G8B8A8_SNORM, {4, 4}},
+        {VK_FORMAT_R8G8B8A8_USCALED, {4, 4}},
+        {VK_FORMAT_R8G8B8A8_SSCALED, {4, 4}},
+        {VK_FORMAT_R8G8B8A8_UINT, {4, 4}},
+        {VK_FORMAT_R8G8B8A8_SINT, {4, 4}},
+        {VK_FORMAT_R8G8B8A8_SRGB, {4, 4}},
+        {VK_FORMAT_B8G8R8A8_UNORM, {4, 4}},
+        {VK_FORMAT_B8G8R8A8_SNORM, {4, 4}},
+        {VK_FORMAT_B8G8R8A8_USCALED, {4, 4}},
+        {VK_FORMAT_B8G8R8A8_SSCALED, {4, 4}},
+        {VK_FORMAT_B8G8R8A8_UINT, {4, 4}},
+        {VK_FORMAT_B8G8R8A8_SINT, {4, 4}},
+        {VK_FORMAT_B8G8R8A8_SRGB, {4, 4}},
+        {VK_FORMAT_A8B8G8R8_UNORM_PACK32, {4, 4}},
+        {VK_FORMAT_A8B8G8R8_SNORM_PACK32, {4, 4}},
+        {VK_FORMAT_A8B8G8R8_USCALED_PACK32, {4, 4}},
+        {VK_FORMAT_A8B8G8R8_SSCALED_PACK32, {4, 4}},
+        {VK_FORMAT_A8B8G8R8_UINT_PACK32, {4, 4}},
+        {VK_FORMAT_A8B8G8R8_SINT_PACK32, {4, 4}},
+        {VK_FORMAT_A8B8G8R8_SRGB_PACK32, {4, 4}},
+        {VK_FORMAT_A2R10G10B10_UNORM_PACK32, {4, 4}},
+        {VK_FORMAT_A2R10G10B10_SNORM_PACK32, {4, 4}},
+        {VK_FORMAT_A2R10G10B10_USCALED_PACK32, {4, 4}},
+        {VK_FORMAT_A2R10G10B10_SSCALED_PACK32, {4, 4}},
+        {VK_FORMAT_A2R10G10B10_UINT_PACK32, {4, 4}},
+        {VK_FORMAT_A2R10G10B10_SINT_PACK32, {4, 4}},
+        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, {4, 4}},
+        {VK_FORMAT_A2B10G10R10_SNORM_PACK32, {4, 4}},
+        {VK_FORMAT_A2B10G10R10_USCALED_PACK32, {4, 4}},
+        {VK_FORMAT_A2B10G10R10_SSCALED_PACK32, {4, 4}},
+        {VK_FORMAT_A2B10G10R10_UINT_PACK32, {4, 4}},
+        {VK_FORMAT_A2B10G10R10_SINT_PACK32, {4, 4}},
+        {VK_FORMAT_R16_UNORM, {2, 1}},
+        {VK_FORMAT_R16_SNORM, {2, 1}},
+        {VK_FORMAT_R16_USCALED, {2, 1}},
+        {VK_FORMAT_R16_SSCALED, {2, 1}},
+        {VK_FORMAT_R16_UINT, {2, 1}},
+        {VK_FORMAT_R16_SINT, {2, 1}},
+        {VK_FORMAT_R16_SFLOAT, {2, 1}},
+        {VK_FORMAT_R16G16_UNORM, {4, 2}},
+        {VK_FORMAT_R16G16_SNORM, {4, 2}},
+        {VK_FORMAT_R16G16_USCALED, {4, 2}},
+        {VK_FORMAT_R16G16_SSCALED, {4, 2}},
+        {VK_FORMAT_R16G16_UINT, {4, 2}},
+        {VK_FORMAT_R16G16_SINT, {4, 2}},
+        {VK_FORMAT_R16G16_SFLOAT, {4, 2}},
+        {VK_FORMAT_R16G16B16_UNORM, {6, 3}},
+        {VK_FORMAT_R16G16B16_SNORM, {6, 3}},
+        {VK_FORMAT_R16G16B16_USCALED, {6, 3}},
+        {VK_FORMAT_R16G16B16_SSCALED, {6, 3}},
+        {VK_FORMAT_R16G16B16_UINT, {6, 3}},
+        {VK_FORMAT_R16G16B16_SINT, {6, 3}},
+        {VK_FORMAT_R16G16B16_SFLOAT, {6, 3}},
+        {VK_FORMAT_R16G16B16A16_UNORM, {8, 4}},
+        {VK_FORMAT_R16G16B16A16_SNORM, {8, 4}},
+        {VK_FORMAT_R16G16B16A16_USCALED, {8, 4}},
+        {VK_FORMAT_R16G16B16A16_SSCALED, {8, 4}},
+        {VK_FORMAT_R16G16B16A16_UINT, {8, 4}},
+        {VK_FORMAT_R16G16B16A16_SINT, {8, 4}},
+        {VK_FORMAT_R16G16B16A16_SFLOAT, {8, 4}},
+        {VK_FORMAT_R32_UINT, {4, 1}},
+        {VK_FORMAT_R32_SINT, {4, 1}},
+        {VK_FORMAT_R32_SFLOAT, {4, 1}},
+        {VK_FORMAT_R32G32_UINT, {8, 2}},
+        {VK_FORMAT_R32G32_SINT, {8, 2}},
+        {VK_FORMAT_R32G32_SFLOAT, {8, 2}},
+        {VK_FORMAT_R32G32B32_UINT, {12, 3}},
+        {VK_FORMAT_R32G32B32_SINT, {12, 3}},
+        {VK_FORMAT_R32G32B32_SFLOAT, {12, 3}},
+        {VK_FORMAT_R32G32B32A32_UINT, {16, 4}},
+        {VK_FORMAT_R32G32B32A32_SINT, {16, 4}},
+        {VK_FORMAT_R32G32B32A32_SFLOAT, {16, 4}},
+        {VK_FORMAT_R64_UINT, {8, 1}},
+        {VK_FORMAT_R64_SINT, {8, 1}},
+        {VK_FORMAT_R64_SFLOAT, {8, 1}},
+        {VK_FORMAT_R64G64_UINT, {16, 2}},
+        {VK_FORMAT_R64G64_SINT, {16, 2}},
+        {VK_FORMAT_R64G64_SFLOAT, {16, 2}},
+        {VK_FORMAT_R64G64B64_UINT, {24, 3}},
+        {VK_FORMAT_R64G64B64_SINT, {24, 3}},
+        {VK_FORMAT_R64G64B64_SFLOAT, {24, 3}},
+        {VK_FORMAT_R64G64B64A64_UINT, {32, 4}},
+        {VK_FORMAT_R64G64B64A64_SINT, {32, 4}},
+        {VK_FORMAT_R64G64B64A64_SFLOAT, {32, 4}},
+        {VK_FORMAT_B10G11R11_UFLOAT_PACK32, {4, 3}},
+        {VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, {4, 3}},
+        {VK_FORMAT_D16_UNORM, {2, 1}},
+        {VK_FORMAT_X8_D24_UNORM_PACK32, {4, 1}},
+        {VK_FORMAT_D32_SFLOAT, {4, 1}},
+        {VK_FORMAT_S8_UINT, {1, 1}},
+        {VK_FORMAT_D16_UNORM_S8_UINT, {3, 2}},
+        {VK_FORMAT_D24_UNORM_S8_UINT, {4, 2}},
+        {VK_FORMAT_D32_SFLOAT_S8_UINT, {8, 2}},
+        {VK_FORMAT_BC1_RGB_UNORM_BLOCK, {8, 4}},
+        {VK_FORMAT_BC1_RGB_SRGB_BLOCK, {8, 4}},
+        {VK_FORMAT_BC1_RGBA_UNORM_BLOCK, {8, 4}},
+        {VK_FORMAT_BC1_RGBA_SRGB_BLOCK, {8, 4}},
+        {VK_FORMAT_BC2_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_BC2_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_BC3_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_BC3_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_BC4_UNORM_BLOCK, {8, 4}},
+        {VK_FORMAT_BC4_SNORM_BLOCK, {8, 4}},
+        {VK_FORMAT_BC5_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_BC5_SNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_BC6H_UFLOAT_BLOCK, {16, 4}},
+        {VK_FORMAT_BC6H_SFLOAT_BLOCK, {16, 4}},
+        {VK_FORMAT_BC7_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_BC7_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, {8, 3}},
+        {VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK, {8, 3}},
+        {VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK, {8, 4}},
+        {VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK, {8, 4}},
+        {VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_EAC_R11_UNORM_BLOCK, {8, 1}},
+        {VK_FORMAT_EAC_R11_SNORM_BLOCK, {8, 1}},
+        {VK_FORMAT_EAC_R11G11_UNORM_BLOCK, {16, 2}},
+        {VK_FORMAT_EAC_R11G11_SNORM_BLOCK, {16, 2}},
+        {VK_FORMAT_ASTC_4x4_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_4x4_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_5x4_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_5x4_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_5x5_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_5x5_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_6x5_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_6x5_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_6x6_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_6x6_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_8x5_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_8x5_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_8x6_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_8x6_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_8x8_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_8x8_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x5_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x5_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x6_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x6_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x8_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x8_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x10_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_10x10_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_12x10_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_12x10_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_12x12_UNORM_BLOCK, {16, 4}},
+        {VK_FORMAT_ASTC_12x12_SRGB_BLOCK, {16, 4}},
+        {VK_FORMAT_PVRTC1_2BPP_UNORM_BLOCK_IMG, {8, 4}},
+        {VK_FORMAT_PVRTC1_4BPP_UNORM_BLOCK_IMG, {8, 4}},
+        {VK_FORMAT_PVRTC2_2BPP_UNORM_BLOCK_IMG, {8, 4}},
+        {VK_FORMAT_PVRTC2_4BPP_UNORM_BLOCK_IMG, {8, 4}},
+        {VK_FORMAT_PVRTC1_2BPP_SRGB_BLOCK_IMG, {8, 4}},
+        {VK_FORMAT_PVRTC1_4BPP_SRGB_BLOCK_IMG, {8, 4}},
+        {VK_FORMAT_PVRTC2_2BPP_SRGB_BLOCK_IMG, {8, 4}},
+        {VK_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG, {8, 4}},
+        // KHR_sampler_YCbCr_conversion extension - single-plane variants
+        // 'PACK' formats are normal, uncompressed
+        {VK_FORMAT_R10X6_UNORM_PACK16, {2, 1}},
+        {VK_FORMAT_R10X6G10X6_UNORM_2PACK16, {4, 2}},
+        {VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16, {8, 4}},
+        {VK_FORMAT_R12X4_UNORM_PACK16, {2, 1}},
+        {VK_FORMAT_R12X4G12X4_UNORM_2PACK16, {4, 2}},
+        {VK_FORMAT_R12X4G12X4B12X4A12X4_UNORM_4PACK16, {8, 4}},
+        // _422 formats encode 2 texels per entry with B, R components shared - treated as compressed w/ 2x1 block size
+        {VK_FORMAT_G8B8G8R8_422_UNORM, {4, 4}},
+        {VK_FORMAT_B8G8R8G8_422_UNORM, {4, 4}},
+        {VK_FORMAT_G10X6B10X6G10X6R10X6_422_UNORM_4PACK16, {8, 4}},
+        {VK_FORMAT_B10X6G10X6R10X6G10X6_422_UNORM_4PACK16, {8, 4}},
+        {VK_FORMAT_G12X4B12X4G12X4R12X4_422_UNORM_4PACK16, {8, 4}},
+        {VK_FORMAT_B12X4G12X4R12X4G12X4_422_UNORM_4PACK16, {8, 4}},
+        {VK_FORMAT_G16B16G16R16_422_UNORM, {8, 4}},
+        {VK_FORMAT_B16G16R16G16_422_UNORM, {8, 4}},
+        // KHR_sampler_YCbCr_conversion extension - multi-plane variants
+        // Formats that 'share' components among texels (_420 and _422), size represents total bytes for the smallest possible texel block
+        // _420 share B, R components within a 2x2 texel block
+        {VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, {6, 3}},
+        {VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, {6, 3}},
+        {VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16, {12, 3}},
+        {VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16, {12, 3}},
+        {VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16, {12, 3}},
+        {VK_FORMAT_G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16, {12, 3}},
+        {VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM, {12, 3}},
+        {VK_FORMAT_G16_B16R16_2PLANE_420_UNORM, {12, 3}},
+        // _422 share B, R components within a 2x1 texel block
+        {VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM, {4, 3}},
+        {VK_FORMAT_G8_B8R8_2PLANE_422_UNORM, {4, 3}},
+        {VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16, {8, 3}},
+        {VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16, {8, 3}},
+        {VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16, {8, 3}},
+        {VK_FORMAT_G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16, {8, 3}},
+        {VK_FORMAT_G16_B16_R16_3PLANE_422_UNORM, {8, 3}},
+        {VK_FORMAT_G16_B16R16_2PLANE_422_UNORM, {8, 3}},
+        // _444 do not share
+        {VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM, {3, 3}},
+        {VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16, {6, 3}},
+        {VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16, {6, 3}},
+        {VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM, {6, 3}}};
+
+}
+
+ERROR_TYPE vk_utils::load_texture(
+  const char* path, 
+  VkQueue transfer_queue, 
+  uint32_t transfer_queue_family_index, 
+  VkCommandPool cmd_pool, 
+  const sampler_info& sampler, 
+  vk_utils::vma_image_handler& out_image, 
+  vk_utils::image_view_handler& out_image_view, 
+  vk_utils::sampler_handler& out_image_sampler)
+{
+    constexpr const char* ktx_formats[] {".ktx", ".ktx2"};
+    constexpr const char* stb_formats[] {".png", ".jpg", ".jpeg"};
+
+    auto find_cond = [path](const char* ext) {
+        return strstr(path, ext) != nullptr;
+    };
+
+    if (std::find_if(std::begin(ktx_formats), std::end(ktx_formats), find_cond) != std::end(ktx_formats)) {
+        PASS_ERROR(load_ktx_texture(path, transfer_queue, transfer_queue_family_index, cmd_pool, sampler, out_image, out_image_view, out_image_sampler));
+    } else if (std::find_if(std::begin(stb_formats), std::end(stb_formats), find_cond) != std::end(stb_formats)) {
+        PASS_ERROR(load_texture_2D(path, transfer_queue, transfer_queue_family_index, cmd_pool, sampler, out_image, out_image_view, out_image_sampler));
+    } else {
+        RAISE_ERROR_WARN(-1, "unsupported image type.");
+    }
+
+    RAISE_ERROR_OK();
+}
 
 ERROR_TYPE vk_utils::load_texture_2D(
     const char* path,
     VkQueue transfer_queue,
+    uint32_t transfer_queue_family_index,
     VkCommandPool cmd_pool,
+    const sampler_info& sampler,
     vk_utils::vma_image_handler& out_image,
-    vk_utils::image_view_handler& out_img_view,
-    vk_utils::sampler_handler& out_sampler,
+    vk_utils::image_view_handler& out_image_view,
+    vk_utils::sampler_handler& out_image_sampler,
     bool gen_mips)
 {
     int w, h, c;
@@ -95,7 +439,7 @@ ERROR_TYPE vk_utils::load_texture_2D(
             RAISE_ERROR_WARN(-1, "invalid img format.");
     }
 
-    PASS_ERROR(create_texture_2D(transfer_queue, cmd_pool, w, h, fmt, gen_mips, img_data_ptr, out_image, out_img_view, out_sampler));
+    PASS_ERROR(create_texture_2D(transfer_queue, transfer_queue_family_index, cmd_pool, sampler, w, h, fmt, gen_mips, img_data_ptr, out_image, out_image_view, out_image_sampler));
 
     RAISE_ERROR_OK();
 }
@@ -103,7 +447,9 @@ ERROR_TYPE vk_utils::load_texture_2D(
 
 ERROR_TYPE vk_utils::create_texture_2D(
     VkQueue transfer_queue,
+    uint32_t transfer_queue_family_index,
     VkCommandPool command_pool,
+    const sampler_info& sampler,
     uint32_t width,
     uint32_t height,
     VkFormat format,
@@ -173,65 +519,58 @@ ERROR_TYPE vk_utils::create_texture_2D(
         create_buffer(staging_buffer, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, width * height * pixel_size, data);
     }
 
-    VkImageCreateInfo image_info{};
-    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image_info.pNext = nullptr;
-    image_info.flags = 0;
-    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.format = format;
-    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image_info.arrayLayers = 1;
-    image_info.mipLevels = mip_levels;
-    image_info.extent = {
-        .width = width,
-        .height = height,
-        .depth = 1};
+    VkImageCreateInfo image_info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {
+            .width = width,
+            .height = height,
+            .depth = 1},
+        .mipLevels = mip_levels,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 1,
+        .pQueueFamilyIndices = &transfer_queue_family_index,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
 
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-
-    VmaAllocationCreateInfo image_alloc_info{};
-    image_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VmaAllocationCreateInfo image_alloc_info{
+        .usage = VMA_MEMORY_USAGE_GPU_ONLY
+    };
 
     if (const auto e = image.init(vk_utils::context::get().allocator(), &image_info, &image_alloc_info); e != VK_SUCCESS) {
         RAISE_ERROR_WARN(e, "Cannot init image.");
     }
 
-    VkImageViewCreateInfo img_view_info{};
-    img_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    img_view_info.pNext = nullptr;
-    img_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    img_view_info.format = image_info.format;
-    img_view_info.components = components;
-    img_view_info.image = image;
-    img_view_info.subresourceRange.baseArrayLayer = 0;
-    img_view_info.subresourceRange.layerCount = 1;
-    img_view_info.subresourceRange.baseMipLevel = 0;
-    img_view_info.subresourceRange.levelCount = mip_levels;
-    img_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    VkImageViewCreateInfo img_view_info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .image = image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = image_info.format,
+        .components = components,
+     
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = mip_levels,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        }
+    };
 
     if (const auto e = image_view.init(vk_utils::context::get().device(), &img_view_info); e != VK_SUCCESS) {
         image.destroy();
         RAISE_ERROR_WARN(e, "Cannot init image view.");
     }
 
-    VkSamplerCreateInfo sampler_info{};
-    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampler_info.pNext = nullptr;
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.minFilter = VK_FILTER_LINEAR;
-    sampler_info.magFilter = VK_FILTER_LINEAR;
-    sampler_info.anisotropyEnable = VK_FALSE;
-    sampler_info.maxAnisotropy = 0;
-    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    sampler_info.minLod = 0;
-    sampler_info.maxLod = mip_levels - 1;
-    sampler_info.mipLodBias = 0;
-    sampler_info.compareEnable = VK_FALSE;
+    VkSamplerCreateInfo sampler_info = get_sampler_info(sampler, mip_levels);
 
     if (const auto e = image_sampler.init(vk_utils::context::get().device(), &sampler_info); e != VK_SUCCESS) {
         image.destroy();
@@ -533,7 +872,6 @@ bool vk_utils::check_linear_tiling_format(VkFormat req_fmt, VkFormatFeatureFlagB
     return props.linearTilingFeatures & features_flags;
 }
 
-
 ERROR_TYPE vk_utils::load_shader(
     const char* shader_path,
     vk_utils::shader_module_handler& handle,
@@ -652,6 +990,340 @@ ERROR_TYPE vk_utils::create_shader_module(
     }
 
     handle = std::move(module);
+
+    RAISE_ERROR_OK();
+}
+
+ERROR_TYPE vk_utils::load_ktx_texture(
+  const char* path, 
+  VkQueue transfer_queue,
+  uint32_t transfer_queue_family_index, 
+  VkCommandPool cmd_pool, 
+  const sampler_info& sampler, 
+  vk_utils::vma_image_handler& out_image, 
+  vk_utils::image_view_handler& out_image_view, 
+  vk_utils::sampler_handler& out_image_sampler)
+{
+    std::unique_ptr<FILE, std::function<void(FILE*)>> f_handle(nullptr, [](FILE* f) { fclose(f); });
+    f_handle.reset(fopen(path, "rb"));
+
+    if (f_handle == nullptr) {
+        RAISE_ERROR_WARN(-1, "cannot load texture file.");
+    }
+
+    fseek(f_handle.get(), 0L, SEEK_END);
+    size_t size = ftell(f_handle.get());
+    fseek(f_handle.get(), 0L, SEEK_SET);
+
+    std::vector<uint8_t> file_data(size);
+    fread(file_data.data(), 1, size, f_handle.get());
+
+    PASS_ERROR(create_ktx_texture(
+      file_data.data(),
+      size,
+      transfer_queue, 
+      transfer_queue_family_index, 
+      cmd_pool, 
+      sampler, 
+      out_image,
+      out_image_view, 
+      out_image_sampler));
+
+    RAISE_ERROR_OK();
+}
+
+ #define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb/stb_image_write.h>
+
+ERROR_TYPE vk_utils::create_ktx_texture(
+    const void* data,
+    size_t data_size,
+    VkQueue transfer_queue,
+    uint32_t transfer_queue_family_index,
+    VkCommandPool cmd_pool,
+    const sampler_info& sampler,
+    vk_utils::vma_image_handler& out_image,
+    vk_utils::image_view_handler& out_img_view,
+    vk_utils::sampler_handler& out_sampler)
+{
+
+    const uint8_t* header_begin = static_cast<const uint8_t*>(data);
+
+    const auto header = read_struct<ktx2_header>(&header_begin);
+
+    auto c = strncmp(ktx2_identifier, header.identifier, 12);
+
+    if (c != 0) {
+        RAISE_ERROR_WARN(-1, "bad ktx file.");
+    }
+  
+    if (!check_opt_tiling_format(static_cast<VkFormat>(header.vk_format), VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+        RAISE_ERROR_WARN(-1, "unsupported vk format.");
+    }
+  
+    vk_utils::vma_image_handler image{};
+    vk_utils::image_view_handler image_view{};
+    vk_utils::sampler_handler image_sampler{};
+
+    uint32_t level_count = header.level_count;
+    uint32_t layer_count = header.layer_count == 0 ? 1 : header.layer_count;
+
+    bool gen_mips = false;
+
+    if (level_count == 0) {
+        level_count = std::log2(std::max(header.pixel_width, header.pixel_height));
+        gen_mips = true;
+    }
+
+    const auto image_type = header.pixel_depth != 0 ? VK_IMAGE_TYPE_3D : (header.pixel_height != 0 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_1D);
+    uint32_t flags = 0;
+
+    if (header.layer_count > 0 && image_type != VK_IMAGE_TYPE_1D) {
+        if (image_type == VK_IMAGE_TYPE_3D) {
+            RAISE_ERROR_WARN(-1, "3D textures cannot be arrays.");
+        }
+
+        flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
+    }
+
+    if (header.face_count == 6) {
+        flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
+
+    VkImageCreateInfo image_info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = flags,
+        .imageType = image_type,
+        .format = static_cast<VkFormat>(header.vk_format),
+        .extent = {header.pixel_width, header.pixel_height, header.pixel_depth == 0 ? 1 : header.pixel_depth},
+        .mipLevels = level_count,
+        .arrayLayers = layer_count * header.face_count,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 1,
+        .pQueueFamilyIndices = &transfer_queue_family_index,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+
+    VmaAllocationCreateInfo alloc_info{
+        .usage = VMA_MEMORY_USAGE_GPU_ONLY
+    };
+
+    if (auto res = image.init(vk_utils::context::get().allocator(), &image_info, &alloc_info); res != VK_SUCCESS) {
+        RAISE_ERROR_WARN(-1, "cannot init image");
+    }
+
+    VkImageViewType image_view_type = VK_IMAGE_VIEW_TYPE_3D;
+
+    if (image_type == VK_IMAGE_TYPE_3D) {
+        image_view_type = VK_IMAGE_VIEW_TYPE_3D;
+    } else if (image_type == VK_IMAGE_TYPE_1D) {
+        image_view_type = header.layer_count > 0 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D;
+    } else {
+        if (header.face_count == 6) {
+            image_view_type = header.layer_count > 0 ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE;
+        } else {
+            image_view_type = header.layer_count > 0 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        }
+    }
+
+    VkImageViewCreateInfo image_view_info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = image,
+        .viewType = image_view_type,
+        .format = image_info.format,
+        .components = {
+            .r = VK_COMPONENT_SWIZZLE_R,
+            .g = VK_COMPONENT_SWIZZLE_G,
+            .b = VK_COMPONENT_SWIZZLE_B,
+            .a = VK_COMPONENT_SWIZZLE_A,
+        },
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = level_count,
+            .baseArrayLayer = 0,
+            .layerCount = layer_count * header.face_count,
+        }
+    };
+
+    if (image_view.init(vk_utils::context::get().device(), &image_view_info) != VK_SUCCESS) {
+        RAISE_ERROR_WARN(-1, "cannot init image view");
+    }
+
+    VkSamplerCreateInfo sampler_info = get_sampler_info(sampler, level_count);
+
+    if (image_sampler.init(vk_utils::context::get().device(), &sampler_info) != VK_SUCCESS) {
+        RAISE_ERROR_WARN(-1, "cannot init image sampler");
+    }
+    
+    uint32_t faces_count = header.face_count;
+    uint32_t level_width = header.pixel_width;
+    uint32_t level_height = header.pixel_height;
+    uint32_t level_depth = header.pixel_depth == 0 ? 1 : header.pixel_depth;
+    uint32_t pixel_size = vk_format_table[static_cast<VkFormat>(header.vk_format)].size;
+
+    uint32_t image_size{0};
+
+    std::vector<VkBufferImageCopy> image_copies;
+    image_copies.reserve(level_count * layer_count * faces_count);
+
+    auto level_index_begin = header_begin;
+    const uint8_t* data_begin = reinterpret_cast<const uint8_t*>(data);
+
+    for (uint32_t level = 0; level < level_count; ++level) {
+        const auto curr_level_index = read_struct<level_index>(&level_index_begin);
+
+        auto level_size = level_width * level_height * level_depth * pixel_size;
+        auto mip_padding = 4 - level_size & (4 - 1);
+                  
+        for (uint32_t layer = 0; layer < layer_count; ++layer) {
+            for (uint32_t face = 0; face < faces_count; ++face) {
+                VkBufferImageCopy curr_copy_info{
+                    .bufferOffset = curr_level_index.byte_offset,
+                    .bufferRowLength = level_width,
+                    .bufferImageHeight = level_height,
+
+                    .imageSubresource = {
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .mipLevel = level,
+                   
+                        .baseArrayLayer = layer + face,
+                        .layerCount = 1,
+                    },
+
+                    .imageOffset = {.x = 0, .y = 0, .z = 0},
+
+                    .imageExtent = {.width = level_width, .height = level_height, .depth = level_depth}
+                };
+
+                image_size += level_width * level_height * level_depth * pixel_size;
+
+                image_copies.emplace_back() = curr_copy_info;
+            }
+        }
+        
+        image_size += mip_padding;
+
+        level_width = std::max(1u, level_width / 2u);
+        level_height = std::max(1u, level_height / 2u);
+        level_depth = std::max(1u, level_depth / 2u);
+    }
+
+    VkBufferCreateInfo staging_buffer_info{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = nullptr,
+        .size = data_size,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 1,
+        .pQueueFamilyIndices = &transfer_queue_family_index
+    };
+
+    VmaAllocationCreateInfo staging_buffer_alloc_info{
+        .usage = VMA_MEMORY_USAGE_CPU_TO_GPU,
+    };
+
+    vk_utils::vma_buffer_handler staging_buffer{};
+
+    if (staging_buffer.init(vk_utils::context::get().allocator(), &staging_buffer_info, &staging_buffer_alloc_info) != VK_SUCCESS) {
+        RAISE_ERROR_WARN(-1, "cannot init staging buffer");
+    }
+
+    void* staging_buffer_mapped_data{nullptr};
+    if (vmaMapMemory(vk_utils::context::get().allocator(), staging_buffer, &staging_buffer_mapped_data) != VK_SUCCESS) {
+        RAISE_ERROR_WARN(-1, "cannot map vk memory.");
+    }
+
+    std::memcpy(staging_buffer_mapped_data, data, staging_buffer_info.size);
+
+    vk_utils::cmd_buffers_handler copy_cmd_buffer{};
+    VkCommandBufferAllocateInfo copy_buffer_alloc_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .commandPool = cmd_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+
+    copy_cmd_buffer.init(vk_utils::context::get().device(), cmd_pool, &copy_buffer_alloc_info, 1);
+    
+    VkCommandBufferBeginInfo copy_buffer_begin_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = nullptr,
+    };
+
+    vkBeginCommandBuffer(copy_cmd_buffer[0], &copy_buffer_begin_info);
+
+        VkImageMemoryBarrier image_barrier{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+
+            .oldLayout = image_info.initialLayout,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+
+            .image = image,
+
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = level_count,
+                .baseArrayLayer = 0,
+                .layerCount = layer_count * faces_count,
+            }
+        };
+
+    vkCmdPipelineBarrier(copy_cmd_buffer[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &image_barrier);
+    
+    vkCmdCopyBufferToImage(copy_cmd_buffer[0], staging_buffer, image, image_barrier.newLayout, image_copies.size(), image_copies.data());
+    
+    image_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    image_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    image_barrier.oldLayout = image_barrier.newLayout;
+    image_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    
+    vkCmdPipelineBarrier(copy_cmd_buffer[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &image_barrier);
+
+    if (vkEndCommandBuffer(copy_cmd_buffer[0]) != VK_SUCCESS) {
+        RAISE_ERROR_WARN(-1, "cannot map write cmd buffer.");
+    }
+
+    VkSubmitInfo submit_info
+    {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreCount = 0,
+        .pWaitSemaphores = nullptr,
+        .pWaitDstStageMask = nullptr,
+
+        .commandBufferCount = 1,
+        .pCommandBuffers = copy_cmd_buffer,
+
+        .signalSemaphoreCount = 0,
+        .pSignalSemaphores = nullptr,
+    };
+
+    auto fence = create_fence();
+
+    vkQueueSubmit(transfer_queue, 1, &submit_info, fence);
+    vkWaitForFences(vk_utils::context::get().device(), 1, fence, VK_TRUE, UINT64_MAX);
+
+    out_image = std::move(image);
+    out_img_view = std::move(image_view);
+    out_sampler = std::move(image_sampler);
 
     RAISE_ERROR_OK();
 }

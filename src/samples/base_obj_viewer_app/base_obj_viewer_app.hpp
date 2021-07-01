@@ -9,12 +9,30 @@
 #include<glm/mat4x4.hpp>
 #include<glm/vec2.hpp>
 
+#include <memory>
+#include <vector>
+#include <functional>
+
 class base_obj_viewer_app : public app::vk_app
 {
 public:
-    base_obj_viewer_app(const char* app_name, int argc, const char** argv);
+    struct args_parser
+    {
+        args_parser();
+        virtual ~args_parser() = default;
+        virtual ERROR_TYPE parse_args(int argc, const char** argv);
+        vk_utils::obj_loader::obj_model_info& get_model_info();
+
+    protected:
+        vk_utils::obj_loader::obj_model_info m_model_info{};
+        std::vector<std::function<void(const char*)>> m_parse_functions;
+    };
+
+    base_obj_viewer_app(const char* app_name, std::unique_ptr<args_parser> args_parser = std::make_unique<base_obj_viewer_app::args_parser>());
+    ERROR_TYPE run(int argc, const char** argv) override;
 
 protected:
+
     struct global_ubo
     {
         glm::mat4 projection = glm::mat4{1.0f};
@@ -41,6 +59,8 @@ protected:
     ERROR_TYPE on_mouse_moved(uint64_t x, uint64_t y) override;
 
     ERROR_TYPE draw_frame() override;
+     
+    std::unique_ptr<args_parser> m_args_parser;
 
     vk_utils::obj_loader::obj_model m_model{};
     vk_utils::vma_buffer_handler m_ubo{};
