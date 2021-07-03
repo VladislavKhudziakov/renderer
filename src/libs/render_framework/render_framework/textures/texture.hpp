@@ -11,8 +11,6 @@ namespace render_framework
     {
     public:
         virtual ~texture_impl() = default;
-        virtual uint64_t get_view() const = 0;
-        virtual uint64_t get_sampler() const = 0;
     };
 
     class texture : public asset<texture, texture_impl>
@@ -23,9 +21,6 @@ namespace render_framework
         texture& operator=(texture&& other) noexcept;
 
         virtual ~texture() override;
-
-        virtual uint64_t get_view() const;
-        virtual uint64_t get_sampler() const;
     };
 
     class texture_builder
@@ -50,8 +45,8 @@ namespace render_framework
 
         virtual ~texture_builder() = default;
 
-        texture_builder* set_filtering(texture_filtering filterind);
-        texture_builder* set_address_mode(texture_address_mode address_mode);
+        texture_builder& set_filtering(texture_filtering filterind);
+        texture_builder& set_address_mode(texture_address_mode address_mode);
 
         virtual ERROR_TYPE create(texture& result) = 0;
 

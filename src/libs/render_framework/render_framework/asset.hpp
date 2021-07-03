@@ -23,12 +23,12 @@ namespace render_framework
 
         ImplType* get_impl()
         {
-            m_impl.get();
+            return m_impl.get();
         }
 
         const ImplType* get_impl() const
         {
-            m_impl.get();
+            return m_impl.get();
         }
 
     protected:

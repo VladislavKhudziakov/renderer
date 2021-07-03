@@ -44,7 +44,7 @@ namespace
         uint64_t sgd_byte_length;
     };
 
-    constexpr char ktx2_identifier[]{'«', 'K', 'T', 'X', ' ', '2', '0', '»', '\r', '\n', '\x1A', '\n'};
+    constexpr unsigned char ktx2_identifier[]{0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A};
 
     template<typename T>
     T read_struct(const uint8_t** begin)
@@ -790,7 +790,8 @@ ERROR_TYPE vk_utils::create_buffer(
     VkBufferUsageFlags buffer_usage,
     VmaMemoryUsage memory_usage,
     uint32_t size,
-    const void* data)
+    const void* data,
+    uint32_t transfer_queue_family)
 {
     vk_utils::vma_buffer_handler buffer;
 
@@ -800,7 +801,11 @@ ERROR_TYPE vk_utils::create_buffer(
     buffer_info.size = size;
     buffer_info.usage = buffer_usage;
     buffer_info.queueFamilyIndexCount = 1;
-    const uint32_t family_index = vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS);
+
+    const uint32_t family_index = transfer_queue_family == -1
+        ? vk_utils::context::get().queue_family_index(vk_utils::context::QUEUE_TYPE_GRAPHICS)
+        : transfer_queue_family;
+
     buffer_info.pQueueFamilyIndices = &family_index;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -1051,7 +1056,7 @@ ERROR_TYPE vk_utils::create_ktx_texture(
 
     const auto header = read_struct<ktx2_header>(&header_begin);
 
-    auto c = strncmp(ktx2_identifier, header.identifier, 12);
+    auto c = strncmp(reinterpret_cast<const char*>(ktx2_identifier), header.identifier, 12);
 
     if (c != 0) {
         RAISE_ERROR_WARN(-1, "bad ktx file.");

@@ -58,8 +58,8 @@ namespace render_framework
     {
     public:
         virtual ~parameter_builder() = default;
-        parameter_builder* set_value_type(parameter::value_type);
-        parameter_builder* set_elements_count(size_t);
+        parameter_builder& set_value_type(parameter::value_type);
+        parameter_builder& set_elements_count(size_t);
 
         ERROR_TYPE create(parameter& res);
 
@@ -89,7 +89,7 @@ namespace render_framework
     class parameters_list_builder
     {
     public:
-        parameters_list_builder* add_parameter(parameter&);
+        parameters_list_builder& add_parameter(parameter&);
         virtual ERROR_TYPE create(parameters_list&) = 0;
 
     protected:

@@ -51,17 +51,17 @@ void parameter::onupdate(const uint8_t* value)
 }
 
 
-parameter_builder* parameter_builder::set_value_type(parameter::value_type value_type)
+parameter_builder& parameter_builder::set_value_type(parameter::value_type value_type)
 {
     m_value_type = value_type;
-    return this;
+    return *this;
 }
 
 
-parameter_builder* parameter_builder::set_elements_count(size_t count)
+parameter_builder& parameter_builder::set_elements_count(size_t count)
 {
     m_elements_count = count;
-    return this;
+    return *this;
 }
 
 
@@ -81,10 +81,10 @@ ERROR_TYPE parameter_builder::create(parameter& res)
 }
 
 
-parameters_list_builder* parameters_list_builder::add_parameter(parameter& new_paramters)
+parameters_list_builder& parameters_list_builder::add_parameter(parameter& new_paramters)
 {
     m_parameters_list.push_back(&new_paramters);
-    return this;
+    return *this;
 }
 
 

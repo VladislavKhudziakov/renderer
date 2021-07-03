@@ -6,4 +6,5 @@ make_bin(
     LIB_TYPE
         STATIC
     DEPENDS
-        vk_utils)
+        vk_utils
+        utils)

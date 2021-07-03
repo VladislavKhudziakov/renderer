@@ -53,7 +53,8 @@ namespace vk_utils
         VkBufferUsageFlags buffer_usage,
         VmaMemoryUsage memory_usage,
         uint32_t size,
-        const void* data = nullptr);
+        const void* data = nullptr,
+        uint32_t transfer_queue_family = -1);
 
     ERROR_TYPE load_shader(
         const char* shader_path,

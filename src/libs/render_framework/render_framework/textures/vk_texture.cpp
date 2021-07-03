@@ -3,41 +3,36 @@
 #include <vk_utils/context.hpp>
 
 
-namespace render_framework
+using namespace render_framework;
+using namespace detail;
+
+detail::vk_texture_impl::vk_texture_impl(
+    vk_utils::vma_image_handler image,
+    vk_utils::image_view_handler image_view,
+    vk_utils::sampler_handler image_sampler)
+    : m_image(std::move(image))
+    , m_image_view(std::move(image_view))
+    , m_image_sampler(std::move(image_sampler))
 {
-    class vk_texture_impl : public texture_impl
-    {
-    public:
-        vk_texture_impl(vk_utils::vma_image_handler image, vk_utils::image_view_handler image_view, vk_utils::sampler_handler image_sampler)
-            : m_image(std::move(image))
-            , m_image_view(std::move(image_view))
-            , m_image_sampler(std::move(image_sampler))
-        {
-        }
-
-        ~vk_texture_impl() override = default;
-        
-        virtual uint64_t get_view() const override
-        {
-            static_assert(sizeof(VkImageView) == sizeof(uint64_t));
-            return reinterpret_cast<uint64_t>(static_cast<VkImageView>(m_image_view));
-        }
-
-        virtual uint64_t get_sampler() const override
-        {
-            static_assert(sizeof(VkSampler) == sizeof(uint64_t));
-            return reinterpret_cast<uint64_t>(static_cast<VkSampler>(m_image_sampler));
-        }
-
-    private:
-        vk_utils::vma_image_handler m_image;
-        vk_utils::image_view_handler m_image_view;
-        vk_utils::sampler_handler m_image_sampler;
-    };
 }
 
 
-using namespace render_framework;
+VkImage vk_texture_impl::get_image() const
+{
+    return m_image;
+}
+
+
+VkImageView vk_texture_impl::get_image_view() const
+{
+    return m_image_view;
+}
+
+
+VkSampler vk_texture_impl::get_sampler() const
+{
+    return m_image_sampler;
+}
 
 
 vk_texture_builder::vk_texture_builder(uint32_t queue_family)
@@ -46,31 +41,31 @@ vk_texture_builder::vk_texture_builder(uint32_t queue_family)
 }
 
 
-vk_texture_builder* vk_texture_builder::set_command_pool(VkCommandPool command_pool)
+vk_texture_builder& vk_texture_builder::set_command_pool(VkCommandPool command_pool)
 {
     m_command_pool = command_pool;
-    return this;
+    return *this;
 }
 
 
-vk_texture_builder* vk_texture_builder::set_queue(VkQueue queue)
+vk_texture_builder& vk_texture_builder::set_queue(VkQueue queue)
 {
     m_queue = queue;
-    return this;
+    return *this;
 }
 
 
-vk_texture_builder* vk_texture_builder::set_command_buffer(VkCommandBuffer command_buffer)
+vk_texture_builder& vk_texture_builder::set_command_buffer(VkCommandBuffer command_buffer)
 {
     m_command_buffer = command_buffer;
-    return this;
+    return *this;
 }
 
 
-vk_texture_builder* vk_texture_builder::set_queue_family(uint32_t queue_family)
+vk_texture_builder& vk_texture_builder::set_queue_family(uint32_t queue_family)
 {
     m_queue_family = queue_family;
-    return this;
+    return *this;
 }
 
 
